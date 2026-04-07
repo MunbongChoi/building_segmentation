@@ -9,6 +9,7 @@ from src.core.dataset import GeoTIFFLoader, GeoTile
 from src.core.inference import SAHIInferenceEngine
 from src.postprocessing.mask_to_polygon import MaskToPolygonConverter, RightAngleRegularizer
 from src.postprocessing.geometry_utils import VectorFileWriter, GeometryUtils
+from src.postprocessing.visualization import MaskVisualizer
 from src.utils.config import PipelineConfig
 from src.utils.logger import logger, setup_logger
 
@@ -52,6 +53,10 @@ class BuildingSegmentationPipeline:
         
         self.vector_writer = VectorFileWriter(
             crs="EPSG:4326",
+            output_dir=str(config.data.output_dir),
+        )
+        self.mask_visualizer = MaskVisualizer(
+            config.visualization,
             output_dir=str(config.data.output_dir),
         )
         
@@ -149,6 +154,17 @@ class BuildingSegmentationPipeline:
         
         masks = inference_result['masks']
         logger.info(f"Processed {tile_count} tiles; detected {len(masks)} buildings")
+        output_basename = Path(geotiff_path).stem
+        output_files = {}
+        
+        if self.config.visualization.enabled:
+            output_files.update(
+                self.mask_visualizer.save_mask_preview(
+                    geotiff_path,
+                    masks,
+                    output_basename,
+                )
+            )
         
         # 4. 마스크 -> 픽셀 좌표계 폴리곤 변환
         polygons = self.mask_converter.masks_to_polygons(masks)
@@ -172,9 +188,6 @@ class BuildingSegmentationPipeline:
             metrics_list.append(metrics)
         
         # 7. 벡터 파일 저장
-        output_basename = Path(geotiff_path).stem
-        output_files = {}
-        
         if 'geojson' in self.config.postprocessing.output_formats:
             output_files['geojson'] = self.vector_writer.write_geojson(
                 geo_polygons,

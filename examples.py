@@ -154,6 +154,8 @@ def example_config_management(output_path: str = "configs/custom_config.yaml"):
     config.augmentation.enable_tta = True
     config.augmentation.tta_scales = [1.0, 1.25]
     config.augmentation.horizontal_flip = True
+    config.visualization.enabled = True
+    config.visualization.max_preview_size = 4096
     config.hyperparameters = {
         'conf_threshold': config.model.conf_threshold,
         'tile_size': config.data.tile_size,
@@ -161,6 +163,8 @@ def example_config_management(output_path: str = "configs/custom_config.yaml"):
         'enable_tta': config.augmentation.enable_tta,
         'tta_scales': config.augmentation.tta_scales,
         'horizontal_flip': config.augmentation.horizontal_flip,
+        'save_mask_overlay': config.visualization.enabled,
+        'mask_preview_max_size': config.visualization.max_preview_size,
     }
 
     config.to_yaml(output_path)
@@ -170,7 +174,8 @@ def example_config_management(output_path: str = "configs/custom_config.yaml"):
     logger.info(
         f"Loaded config: tile_size={loaded_config.data.tile_size}, "
         f"num_workers={loaded_config.gpu.num_workers}, "
-        f"enable_tta={loaded_config.augmentation.enable_tta}"
+        f"enable_tta={loaded_config.augmentation.enable_tta}, "
+        f"save_mask_overlay={loaded_config.visualization.enabled}"
     )
     return loaded_config
 

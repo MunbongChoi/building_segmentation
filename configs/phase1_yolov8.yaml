@@ -84,6 +84,10 @@ hyperparameters:
   horizontal_flip: false
   vertical_flip: false
   tta_merge_iou_threshold: 0.5
+  save_mask_overlay: true
+  mask_preview_max_size: 4096
+  mask_overlay_alpha: 0.45
+  save_binary_mask: false
 
 # Augmentation 설정
 # 현재 실행 파이프라인에는 inference-time augmentation(TTA)만 적용된다.
@@ -101,6 +105,16 @@ augmentation:
     color_jitter: false
     mosaic: false
     mixup: false
+
+# 결과 시각화 설정
+visualization:
+  enabled: true
+  max_preview_size: 4096  # 가장 긴 축 기준 preview 크기. 대용량 TIF 메모리 보호용
+  alpha: 0.45
+  mask_color: [255, 0, 0]      # RGB
+  contour_color: [0, 255, 255] # RGB
+  draw_contours: true
+  save_binary_mask: false
 
 # 파이프라인 설정
 log_level: INFO  # DEBUG, INFO, WARNING, ERROR

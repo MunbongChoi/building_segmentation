@@ -177,6 +177,7 @@ class TestPipelineConfig:
         assert config.gpu.allow_cpu_fallback is False
         assert config.postprocessing.simplification_tolerance == 1.0
         assert config.augmentation.enable_tta is False
+        assert config.visualization.enabled is True
     
     def test_config_yaml_export(self, tmp_path):
         """YAML 내보내기 테스트"""
@@ -209,8 +210,11 @@ hyperparameters:
   allow_cpu_fallback: true
   enable_tta: true
   tta_scales: [1.0, 1.25]
+  save_mask_overlay: false
 augmentation:
   enable_tta: false
+visualization:
+  enabled: true
 """,
             encoding="utf-8",
         )
@@ -224,6 +228,7 @@ augmentation:
         assert loaded_config.gpu.allow_cpu_fallback is True
         assert loaded_config.augmentation.enable_tta is True
         assert loaded_config.augmentation.tta_scales == [1.0, 1.25]
+        assert loaded_config.visualization.enabled is False
 
 
 class TestIntegration:

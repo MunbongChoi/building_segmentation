@@ -84,6 +84,18 @@ class AugmentationConfig:
     vertical_flip: bool = False
     merge_iou_threshold: float = 0.5
     training: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class VisualizationConfig:
+    """마스크 결과물 시각화 설정"""
+    enabled: bool = True
+    max_preview_size: int = 4096
+    alpha: float = 0.45
+    mask_color: List[int] = field(default_factory=lambda: [255, 0, 0])
+    contour_color: List[int] = field(default_factory=lambda: [0, 255, 255])
+    draw_contours: bool = True
+    save_binary_mask: bool = False
     
 
 @dataclass
@@ -94,6 +106,7 @@ class PipelineConfig:
     gpu: GPUConfig = field(default_factory=GPUConfig)
     postprocessing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
     augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
+    visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     
     # YAML 기반 하이퍼파라미터 override.
     # 예: hyperparameters.conf_threshold는 model.conf_threshold를 덮어쓴다.
@@ -131,6 +144,9 @@ class PipelineConfig:
             augmentation=AugmentationConfig(
                 **_filter_fields(AugmentationConfig, augmentation_dict)
             ),
+            visualization=VisualizationConfig(
+                **_filter_fields(VisualizationConfig, config_dict.get('visualization', {}) or {})
+            ),
             hyperparameters=config_dict.get('hyperparameters', {}) or {},
             log_level=config_dict.get('log_level', "INFO"),
             save_intermediate=config_dict.get('save_intermediate', True),
@@ -151,6 +167,8 @@ class PipelineConfig:
             'postprocessing': self.postprocessing,
             'augmentation': self.augmentation,
             'aug': self.augmentation,
+            'visualization': self.visualization,
+            'viz': self.visualization,
         }
         
         for section_name, section_config in section_map.items():
@@ -198,6 +216,15 @@ class PipelineConfig:
             'vertical_flip': (self.augmentation, 'vertical_flip'),
             'tta_merge_iou_threshold': (self.augmentation, 'merge_iou_threshold'),
             'merge_iou_threshold': (self.augmentation, 'merge_iou_threshold'),
+            'save_mask_overlay': (self.visualization, 'enabled'),
+            'visualization_enabled': (self.visualization, 'enabled'),
+            'mask_preview_max_size': (self.visualization, 'max_preview_size'),
+            'max_preview_size': (self.visualization, 'max_preview_size'),
+            'mask_overlay_alpha': (self.visualization, 'alpha'),
+            'mask_color': (self.visualization, 'mask_color'),
+            'contour_color': (self.visualization, 'contour_color'),
+            'draw_contours': (self.visualization, 'draw_contours'),
+            'save_binary_mask': (self.visualization, 'save_binary_mask'),
         }
         
         for key, value in hparams.items():
@@ -225,6 +252,7 @@ class PipelineConfig:
             'gpu': self.gpu.__dict__,
             'postprocessing': self.postprocessing.__dict__,
             'augmentation': self.augmentation.__dict__,
+            'visualization': self.visualization.__dict__,
             'hyperparameters': self.hyperparameters,
             'log_level': self.log_level,
             'save_intermediate': self.save_intermediate,
