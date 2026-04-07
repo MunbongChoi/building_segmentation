@@ -55,6 +55,45 @@ postprocessing:
   # 출력 포맷
   output_formats: [geojson, shapefile, json]
 
+# 하이퍼파라미터 override
+# 아래 값은 위 data/model/gpu/postprocessing/augmentation 섹션 값을 덮어쓴다.
+# 실험 시에는 이 섹션만 바꿔도 된다.
+hyperparameters:
+  tile_size: 1024
+  overlap_ratio: 0.1
+  conf_threshold: 0.4
+  iou_threshold: 0.5
+  sahi_slice_height: 1024
+  sahi_slice_width: 1024
+  sahi_overlap_height_ratio: 0.1
+  sahi_overlap_width_ratio: 0.1
+  mask_nms_threshold: 0.5
+  num_workers: 4
+  simplification_tolerance: 1.0
+  min_polygon_area: 100.0
+  enable_tta: false
+  tta_scales: [1.0]
+  horizontal_flip: false
+  vertical_flip: false
+  tta_merge_iou_threshold: 0.5
+
+# Augmentation 설정
+# 현재 실행 파이프라인에는 inference-time augmentation(TTA)만 적용된다.
+# training은 향후 학습 파이프라인에서 같은 YAML을 재사용하기 위한 보존 영역이다.
+augmentation:
+  enable_tta: false
+  tta_scales: [1.0]
+  horizontal_flip: false
+  vertical_flip: false
+  merge_iou_threshold: 0.5
+  training:
+    random_horizontal_flip: false
+    random_vertical_flip: false
+    random_rotate90: false
+    color_jitter: false
+    mosaic: false
+    mixup: false
+
 # 파이프라인 설정
 log_level: INFO  # DEBUG, INFO, WARNING, ERROR
 save_intermediate: false  # 중간 결과 저장 여부 (디버깅용)

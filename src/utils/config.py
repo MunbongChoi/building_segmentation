@@ -1,6 +1,6 @@
 """프로젝트 설정 관리"""
-from dataclasses import dataclass, field
-from typing import List
+from dataclasses import dataclass, field, fields
+from typing import Any, Dict, List
 from pathlib import Path
 import yaml
 
@@ -65,6 +65,21 @@ class PostProcessingConfig:
     
     # 출력 포맷
     output_formats: List[str] = field(default_factory=lambda: ["geojson", "shapefile", "json"])
+
+
+@dataclass
+class AugmentationConfig:
+    """추론/학습 augmentation 설정
+
+    현재 실행 파이프라인에는 inference-time augmentation(TTA)만 적용된다.
+    training 딕셔너리는 향후 학습 루프 추가 시 같은 YAML을 재사용하기 위한 보존 영역이다.
+    """
+    enable_tta: bool = False
+    tta_scales: List[float] = field(default_factory=lambda: [1.0])
+    horizontal_flip: bool = False
+    vertical_flip: bool = False
+    merge_iou_threshold: float = 0.5
+    training: Dict[str, Any] = field(default_factory=dict)
     
 
 @dataclass
@@ -74,6 +89,11 @@ class PipelineConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     gpu: GPUConfig = field(default_factory=GPUConfig)
     postprocessing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
+    augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
+    
+    # YAML 기반 하이퍼파라미터 override.
+    # 예: hyperparameters.conf_threshold는 model.conf_threshold를 덮어쓴다.
+    hyperparameters: Dict[str, Any] = field(default_factory=dict)
     
     # 로깅
     log_level: str = "INFO"
@@ -91,14 +111,97 @@ class PipelineConfig:
         if 'output_dir' in data_dict:
             data_dict['output_dir'] = Path(data_dict['output_dir'])
         
-        return cls(
-            data=DataConfig(**data_dict),
-            model=ModelConfig(**(config_dict.get('model', {}) or {})),
-            gpu=GPUConfig(**(config_dict.get('gpu', {}) or {})),
-            postprocessing=PostProcessingConfig(**(config_dict.get('postprocessing', {}) or {})),
+        augmentation_dict = (
+            config_dict.get('augmentation')
+            or config_dict.get('aug')
+            or {}
+        )
+        
+        config = cls(
+            data=DataConfig(**_filter_fields(DataConfig, data_dict)),
+            model=ModelConfig(**_filter_fields(ModelConfig, config_dict.get('model', {}) or {})),
+            gpu=GPUConfig(**_filter_fields(GPUConfig, config_dict.get('gpu', {}) or {})),
+            postprocessing=PostProcessingConfig(
+                **_filter_fields(PostProcessingConfig, config_dict.get('postprocessing', {}) or {})
+            ),
+            augmentation=AugmentationConfig(
+                **_filter_fields(AugmentationConfig, augmentation_dict)
+            ),
+            hyperparameters=config_dict.get('hyperparameters', {}) or {},
             log_level=config_dict.get('log_level', "INFO"),
             save_intermediate=config_dict.get('save_intermediate', True),
         )
+        config.apply_hyperparameters()
+        return config
+
+    def apply_hyperparameters(self) -> None:
+        """hyperparameters 섹션을 실제 실행 설정에 반영"""
+        hparams = self.hyperparameters or {}
+        if not hparams:
+            return
+        
+        section_map = {
+            'data': self.data,
+            'model': self.model,
+            'gpu': self.gpu,
+            'postprocessing': self.postprocessing,
+            'augmentation': self.augmentation,
+            'aug': self.augmentation,
+        }
+        
+        for section_name, section_config in section_map.items():
+            values = hparams.get(section_name)
+            if isinstance(values, dict):
+                _assign_known_fields(section_config, values)
+        
+        flat_aliases = {
+            'tile_size': (self.data, 'tile_size'),
+            'tile_overlap_ratio': (self.data, 'overlap_ratio'),
+            'overlap_ratio': (self.data, 'overlap_ratio'),
+            'data_dir': (self.data, 'data_dir'),
+            'output_dir': (self.data, 'output_dir'),
+            'input_format': (self.data, 'input_format'),
+            'model_name': (self.model, 'model_name'),
+            'model_weights': (self.model, 'model_weights'),
+            'conf_threshold': (self.model, 'conf_threshold'),
+            'confidence_threshold': (self.model, 'conf_threshold'),
+            'iou_threshold': (self.model, 'iou_threshold'),
+            'sahi_slice_height': (self.model, 'sahi_slice_height'),
+            'sahi_slice_width': (self.model, 'sahi_slice_width'),
+            'sahi_overlap_height_ratio': (self.model, 'sahi_overlap_height_ratio'),
+            'sahi_overlap_width_ratio': (self.model, 'sahi_overlap_width_ratio'),
+            'mask_nms_threshold': (self.model, 'mask_nms_threshold'),
+            'device_ids': (self.gpu, 'device_ids'),
+            'use_multi_gpu': (self.gpu, 'use_multi_gpu'),
+            'num_workers': (self.gpu, 'num_workers'),
+            'batch_size': (self.gpu, 'batch_size'),
+            'pin_memory': (self.gpu, 'pin_memory'),
+            'simplification_tolerance': (self.postprocessing, 'simplification_tolerance'),
+            'min_polygon_area': (self.postprocessing, 'min_polygon_area'),
+            'enable_right_angle_regularization': (
+                self.postprocessing,
+                'enable_right_angle_regularization',
+            ),
+            'right_angle_tolerance': (self.postprocessing, 'right_angle_tolerance'),
+            'output_formats': (self.postprocessing, 'output_formats'),
+            'enable_tta': (self.augmentation, 'enable_tta'),
+            'tta_scales': (self.augmentation, 'tta_scales'),
+            'horizontal_flip': (self.augmentation, 'horizontal_flip'),
+            'vertical_flip': (self.augmentation, 'vertical_flip'),
+            'tta_merge_iou_threshold': (self.augmentation, 'merge_iou_threshold'),
+            'merge_iou_threshold': (self.augmentation, 'merge_iou_threshold'),
+        }
+        
+        for key, value in hparams.items():
+            if key in section_map:
+                continue
+            target = flat_aliases.get(key)
+            if target is None:
+                continue
+            config_obj, attr_name = target
+            if attr_name in {'data_dir', 'output_dir'}:
+                value = Path(value)
+            setattr(config_obj, attr_name, value)
     
     def to_yaml(self, yaml_path: str) -> None:
         """설정을 YAML 파일로 저장"""
@@ -113,6 +216,8 @@ class PipelineConfig:
             'model': self.model.__dict__,
             'gpu': self.gpu.__dict__,
             'postprocessing': self.postprocessing.__dict__,
+            'augmentation': self.augmentation.__dict__,
+            'hyperparameters': self.hyperparameters,
             'log_level': self.log_level,
             'save_intermediate': self.save_intermediate,
         }
@@ -123,3 +228,19 @@ class PipelineConfig:
 
 # 기본 설정 인스턴스
 DEFAULT_CONFIG = PipelineConfig()
+
+
+def _filter_fields(config_cls, values: Dict[str, Any]) -> Dict[str, Any]:
+    """dataclass에 정의된 필드만 남긴다."""
+    field_names = {field.name for field in fields(config_cls)}
+    return {key: value for key, value in values.items() if key in field_names}
+
+
+def _assign_known_fields(config_obj, values: Dict[str, Any]) -> None:
+    """이미 생성된 dataclass 객체에 존재하는 필드만 할당한다."""
+    field_names = {field.name for field in fields(config_obj)}
+    for key, value in values.items():
+        if key in field_names:
+            if key in {'data_dir', 'output_dir'}:
+                value = Path(value)
+            setattr(config_obj, key, value)

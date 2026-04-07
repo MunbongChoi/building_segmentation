@@ -173,6 +173,7 @@ class TestPipelineConfig:
         assert config.model.conf_threshold == 0.4
         assert len(config.gpu.device_ids) == 4
         assert config.postprocessing.simplification_tolerance == 1.0
+        assert config.augmentation.enable_tta is False
     
     def test_config_yaml_export(self, tmp_path):
         """YAML 내보내기 테스트"""
@@ -187,6 +188,33 @@ class TestPipelineConfig:
         loaded_config = PipelineConfig.from_yaml(str(yaml_path))
         assert loaded_config.data.tile_size == config.data.tile_size
         assert isinstance(loaded_config.data.data_dir, Path)
+
+    def test_config_hyperparameter_override(self, tmp_path):
+        """YAML hyperparameters override 테스트"""
+        yaml_path = tmp_path / "hparams.yaml"
+        yaml_path.write_text(
+            """
+data:
+  data_dir: ./data
+model:
+  conf_threshold: 0.2
+hyperparameters:
+  conf_threshold: 0.7
+  tile_size: 512
+  enable_tta: true
+  tta_scales: [1.0, 1.25]
+augmentation:
+  enable_tta: false
+""",
+            encoding="utf-8",
+        )
+        
+        loaded_config = PipelineConfig.from_yaml(str(yaml_path))
+        
+        assert loaded_config.model.conf_threshold == 0.7
+        assert loaded_config.data.tile_size == 512
+        assert loaded_config.augmentation.enable_tta is True
+        assert loaded_config.augmentation.tta_scales == [1.0, 1.25]
 
 
 class TestIntegration:

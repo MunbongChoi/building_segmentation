@@ -147,6 +147,17 @@ def example_config_management(output_path: str = "configs/custom_config.yaml"):
     config.model.conf_threshold = 0.5
     config.data.tile_size = 1024
     config.gpu.num_workers = min(4, len(config.gpu.device_ids))
+    config.augmentation.enable_tta = True
+    config.augmentation.tta_scales = [1.0, 1.25]
+    config.augmentation.horizontal_flip = True
+    config.hyperparameters = {
+        'conf_threshold': config.model.conf_threshold,
+        'tile_size': config.data.tile_size,
+        'num_workers': config.gpu.num_workers,
+        'enable_tta': config.augmentation.enable_tta,
+        'tta_scales': config.augmentation.tta_scales,
+        'horizontal_flip': config.augmentation.horizontal_flip,
+    }
 
     config.to_yaml(output_path)
     logger.info(f"Config saved to {output_path}")
@@ -154,7 +165,8 @@ def example_config_management(output_path: str = "configs/custom_config.yaml"):
     loaded_config = PipelineConfig.from_yaml(output_path)
     logger.info(
         f"Loaded config: tile_size={loaded_config.data.tile_size}, "
-        f"num_workers={loaded_config.gpu.num_workers}"
+        f"num_workers={loaded_config.gpu.num_workers}, "
+        f"enable_tta={loaded_config.augmentation.enable_tta}"
     )
     return loaded_config
 

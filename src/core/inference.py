@@ -5,7 +5,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import cv2
 
 from ..utils.logger import logger
-from ..utils.config import ModelConfig, GPUConfig
+from ..utils.config import AugmentationConfig, ModelConfig, GPUConfig
 from .model_manager import MultiGPUModelManager
 
 
@@ -16,14 +16,17 @@ class SAHIInferenceEngine:
         self,
         model_config: ModelConfig,
         gpu_config: GPUConfig,
+        augmentation_config: Optional[AugmentationConfig] = None,
     ):
         """
         Args:
             model_config: 모델 설정
             gpu_config: GPU 설정
+            augmentation_config: inference-time augmentation 설정
         """
         self.model_config = model_config
         self.gpu_config = gpu_config
+        self.augmentation_config = augmentation_config or AugmentationConfig()
         self.model_manager = MultiGPUModelManager(model_config, gpu_config)
         
         self.slice_height = model_config.sahi_slice_height
@@ -63,6 +66,29 @@ class SAHIInferenceEngine:
                 'image_width': int,
             }
         """
+        if self.augmentation_config.enable_tta:
+            return self._predict_with_tta(
+                image,
+                conf_threshold=conf_threshold,
+                iou_threshold=iou_threshold,
+                devices=devices,
+            )
+        
+        return self._predict_with_slicing_base(
+            image,
+            conf_threshold=conf_threshold,
+            iou_threshold=iou_threshold,
+            devices=devices,
+        )
+
+    def _predict_with_slicing_base(
+        self,
+        image: np.ndarray,
+        conf_threshold: float = 0.4,
+        iou_threshold: float = 0.5,
+        devices: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """TTA 없이 기본 SAHI slicing 추론을 수행"""
         image_height, image_width = image.shape[:2]
         
         logger.info(f"Starting SAHI inference on {image_width}x{image_height} image")
@@ -91,6 +117,226 @@ class SAHIInferenceEngine:
         logger.info(f"Inference complete: {len(merged_result['boxes'])} objects detected")
         
         return merged_result
+
+    def _predict_with_tta(
+        self,
+        image: np.ndarray,
+        conf_threshold: float,
+        iou_threshold: float,
+        devices: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """YAML augmentation 설정에 따른 inference-time augmentation 수행"""
+        image_height, image_width = image.shape[:2]
+        variants = self._build_tta_variants(image)
+        
+        logger.info(f"Running TTA inference with {len(variants)} variants")
+        
+        all_masks = []
+        all_boxes = []
+        all_scores = []
+        all_class_ids = []
+        
+        for variant in variants:
+            variant_result = self._predict_with_slicing_base(
+                variant['image'],
+                conf_threshold=conf_threshold,
+                iou_threshold=iou_threshold,
+                devices=devices,
+            )
+            restored_result = self._restore_tta_result(
+                variant_result,
+                variant,
+                original_height=image_height,
+                original_width=image_width,
+            )
+            
+            all_masks.extend(restored_result['masks'])
+            if len(restored_result['boxes']) > 0:
+                all_boxes.append(restored_result['boxes'])
+                all_scores.append(restored_result['scores'])
+                all_class_ids.append(restored_result['class_ids'])
+        
+        boxes = np.concatenate(all_boxes, axis=0) if all_boxes else np.empty((0, 4))
+        scores = np.concatenate(all_scores, axis=0) if all_scores else np.empty(0)
+        class_ids = np.concatenate(all_class_ids, axis=0) if all_class_ids else np.empty(0, dtype=int)
+        
+        merge_iou = (
+            self.augmentation_config.merge_iou_threshold
+            or self.model_config.mask_nms_threshold
+            or iou_threshold
+        )
+        result = self.nms_predictions(
+            all_masks,
+            boxes,
+            scores,
+            class_ids,
+            image_height=image_height,
+            image_width=image_width,
+            iou_threshold=merge_iou,
+        )
+        
+        logger.info(f"TTA inference complete: {len(result['boxes'])} objects detected")
+        return result
+
+    def _build_tta_variants(self, image: np.ndarray) -> List[Dict[str, Any]]:
+        """scale/flip 조합 TTA 이미지 생성"""
+        scales = self.augmentation_config.tta_scales or [1.0]
+        normalized_scales = []
+        for scale in scales:
+            scale = float(scale)
+            if scale <= 0:
+                logger.warning(f"Skipping invalid TTA scale: {scale}")
+                continue
+            if scale not in normalized_scales:
+                normalized_scales.append(scale)
+        
+        if 1.0 not in normalized_scales:
+            normalized_scales.insert(0, 1.0)
+        
+        flip_modes = [(False, False)]
+        if self.augmentation_config.horizontal_flip:
+            flip_modes.append((True, False))
+        if self.augmentation_config.vertical_flip:
+            flip_modes.append((False, True))
+        if self.augmentation_config.horizontal_flip and self.augmentation_config.vertical_flip:
+            flip_modes.append((True, True))
+        
+        variants = []
+        for scale in normalized_scales:
+            scaled_image = self._scale_image(image, scale)
+            for flip_h, flip_v in flip_modes:
+                aug_image = scaled_image
+                if flip_h:
+                    aug_image = np.flip(aug_image, axis=1)
+                if flip_v:
+                    aug_image = np.flip(aug_image, axis=0)
+                
+                variants.append({
+                    'image': np.ascontiguousarray(aug_image),
+                    'scale': scale,
+                    'flip_h': flip_h,
+                    'flip_v': flip_v,
+                })
+        
+        return variants
+
+    @staticmethod
+    def _scale_image(image: np.ndarray, scale: float) -> np.ndarray:
+        """이미지를 TTA scale로 리사이즈"""
+        if scale == 1.0:
+            return image
+        
+        height, width = image.shape[:2]
+        scaled_width = max(1, int(round(width * scale)))
+        scaled_height = max(1, int(round(height * scale)))
+        return cv2.resize(
+            image,
+            (scaled_width, scaled_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+
+    def _restore_tta_result(
+        self,
+        result: Dict[str, Any],
+        variant: Dict[str, Any],
+        original_height: int,
+        original_width: int,
+    ) -> Dict[str, Any]:
+        """TTA 결과를 원본 타일 좌표계로 복원"""
+        restored_masks = []
+        restored_boxes = []
+        restored_scores = []
+        restored_class_ids = []
+        
+        masks = result.get('masks') or []
+        scores = result.get('scores')
+        class_ids = result.get('class_ids')
+        
+        for index, mask_record in enumerate(masks):
+            if scores is None or class_ids is None:
+                continue
+            if index >= len(scores) or index >= len(class_ids):
+                continue
+            
+            restored_record = self._restore_tta_mask_record(
+                mask_record,
+                augmented_height=result['image_height'],
+                augmented_width=result['image_width'],
+                original_height=original_height,
+                original_width=original_width,
+                scale=float(variant['scale']),
+                flip_h=bool(variant['flip_h']),
+                flip_v=bool(variant['flip_v']),
+            )
+            if restored_record is None:
+                continue
+            
+            restored_masks.append(restored_record)
+            restored_boxes.append([
+                restored_record['offset_x'],
+                restored_record['offset_y'],
+                restored_record['offset_x'] + restored_record['width'],
+                restored_record['offset_y'] + restored_record['height'],
+            ])
+            restored_scores.append(scores[index])
+            restored_class_ids.append(class_ids[index])
+        
+        return {
+            'masks': restored_masks,
+            'boxes': np.asarray(restored_boxes) if restored_boxes else np.empty((0, 4)),
+            'scores': np.asarray(restored_scores) if restored_scores else np.empty(0),
+            'class_ids': (
+                np.asarray(restored_class_ids, dtype=int)
+                if restored_class_ids else np.empty(0, dtype=int)
+            ),
+            'image_height': original_height,
+            'image_width': original_width,
+        }
+
+    def _restore_tta_mask_record(
+        self,
+        mask_record: Dict[str, Any],
+        augmented_height: int,
+        augmented_width: int,
+        original_height: int,
+        original_width: int,
+        scale: float,
+        flip_h: bool,
+        flip_v: bool,
+    ) -> Optional[Dict[str, Any]]:
+        """crop mask record를 full mask로 복원한 뒤 TTA transform을 역변환"""
+        full_mask = np.zeros((augmented_height, augmented_width), dtype=np.uint8)
+        mask = (np.asarray(mask_record['mask']) > 0).astype(np.uint8)
+        x = int(mask_record.get('offset_x', 0))
+        y = int(mask_record.get('offset_y', 0))
+        height, width = mask.shape[:2]
+        
+        x_end = min(augmented_width, x + width)
+        y_end = min(augmented_height, y + height)
+        if x >= x_end or y >= y_end:
+            return None
+        
+        full_mask[y:y_end, x:x_end] = mask[:y_end - y, :x_end - x]
+        
+        if flip_v:
+            full_mask = np.flip(full_mask, axis=0)
+        if flip_h:
+            full_mask = np.flip(full_mask, axis=1)
+        
+        if scale != 1.0 or full_mask.shape[:2] != (original_height, original_width):
+            full_mask = cv2.resize(
+                full_mask,
+                (original_width, original_height),
+                interpolation=cv2.INTER_NEAREST,
+            )
+        
+        return self._make_mask_record(
+            full_mask,
+            offset_x=0,
+            offset_y=0,
+            slice_height=original_height,
+            slice_width=original_width,
+        )
 
     def _predict_slices(
         self,

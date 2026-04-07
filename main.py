@@ -38,6 +38,7 @@ class BuildingSegmentationPipeline:
         self.inference_engine = SAHIInferenceEngine(
             config.model,
             config.gpu,
+            config.augmentation,
         )
         
         self.mask_converter = MaskToPolygonConverter(
@@ -54,6 +55,13 @@ class BuildingSegmentationPipeline:
             output_dir=str(config.data.output_dir),
         )
         
+        logger.info(
+            "Augmentation config: "
+            f"enable_tta={config.augmentation.enable_tta}, "
+            f"tta_scales={config.augmentation.tta_scales}, "
+            f"horizontal_flip={config.augmentation.horizontal_flip}, "
+            f"vertical_flip={config.augmentation.vertical_flip}"
+        )
         logger.info("Pipeline initialized successfully")
     
     def process_geotiff(self, geotiff_path: str) -> Dict[str, Any]:
