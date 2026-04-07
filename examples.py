@@ -1,189 +1,212 @@
-"""간단한 예제: Phase 1 파이프라인 사용법"""
-import numpy as np
+"""Phase 1 파이프라인 사용 예제.
+
+예제는 실제 구현 경로를 호출한다. 즉, full_pipeline은 GeoTIFF를 window 단위로
+읽고, 타일/GPU 병렬 추론, 마스크 병합, 픽셀->GIS 좌표 변환, 벡터 저장까지 수행한다.
+"""
+import argparse
 from pathlib import Path
-from src.utils.config import PipelineConfig
-from src.core.dataset import GeoTIFFLoader
-from src.core.model_manager import MultiGPUModelManager
-from src.core.inference import SAHIInferenceEngine
-from src.postprocessing.mask_to_polygon import MaskToPolygonConverter, RightAngleRegularizer
-from src.postprocessing.geometry_utils import VectorFileWriter, GeometryUtils
-from src.utils.logger import setup_logger, get_logger
+from typing import Optional
 
 
-def example_full_pipeline():
-    """완전한 파이프라인 예제"""
-    
-    # 로깅 설정
+def _load_config(config_path: Optional[str] = None):
+    """설정 파일이 있으면 YAML에서, 없으면 기본 설정으로 로드."""
+    from src.utils.config import PipelineConfig
+
+    if config_path:
+        path = Path(config_path)
+        if path.exists():
+            return PipelineConfig.from_yaml(str(path))
+        raise FileNotFoundError(f"Config file not found: {path}")
+
+    default_path = Path("configs/phase1_yolov8.yaml")
+    if default_path.exists():
+        return PipelineConfig.from_yaml(str(default_path))
+
+    return PipelineConfig()
+
+
+def example_full_pipeline(input_path: Optional[str] = None, config_path: Optional[str] = None):
+    """완전한 GeoTIFF 파이프라인 예제."""
+    from main import BuildingSegmentationPipeline
+
+    config = _load_config(config_path)
+    target_path = Path(input_path) if input_path else config.data.data_dir
+
+    if not target_path.exists():
+        raise FileNotFoundError(
+            f"Input path not found: {target_path}. "
+            "GeoTIFF 파일을 data/에 넣거나 --input 경로를 지정하세요."
+        )
+
+    pipeline = BuildingSegmentationPipeline(config)
+    try:
+        if target_path.is_file():
+            return pipeline.process_geotiff(str(target_path))
+        return pipeline.process_directory(str(target_path))
+    finally:
+        pipeline.cleanup()
+
+
+def example_data_loader(input_path: Optional[str] = None, config_path: Optional[str] = None):
+    """windowed GeoTIFF 데이터 로더 예제."""
+    from src.core.dataset import GeoTIFFLoader
+    from src.utils.logger import get_logger, setup_logger
+
     setup_logger(log_level="INFO")
     logger = get_logger(__name__)
-    
-    # 1. 설정 로드
-    logger.info("1. Loading configuration...")
+    config = _load_config(config_path)
+    loader = GeoTIFFLoader(
+        tile_size=config.data.tile_size,
+        overlap_ratio=config.data.overlap_ratio,
+    )
+
+    logger.info(
+        f"GeoTIFFLoader: tile_size={loader.tile_size}, "
+        f"overlap_ratio={loader.overlap_ratio}, stride={loader.stride}"
+    )
+
+    if not input_path:
+        logger.info("Use --input <geotiff_path> to inspect metadata and tile windows.")
+        return None
+
+    path = Path(input_path)
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f"GeoTIFF file not found: {path}")
+
+    metadata = loader.load_metadata(str(path))
+    grid_info = loader.get_tile_grid_info(str(path))
+    logger.info(
+        f"Metadata: width={metadata['width']}, height={metadata['height']}, "
+        f"crs={metadata['crs']}"
+    )
+    logger.info(f"Grid info: {grid_info}")
+
+    for tile_index, tile in enumerate(loader.tile_geotiff(str(path))):
+        logger.info(
+            f"Tile {tile.tile_id}: offset=({tile.global_x}, {tile.global_y}), "
+            f"valid_size={tile.valid_width}x{tile.valid_height}, bounds={tile.bounds}"
+        )
+        if tile_index >= 2:
+            logger.info("Only the first 3 tiles are displayed.")
+            break
+
+    return grid_info
+
+
+def example_multi_gpu(config_path: Optional[str] = None, load_model: bool = False):
+    """Multi-GPU 설정 및 실제 추론 디바이스 예제."""
+    from src.utils.logger import get_logger, setup_logger
+
+    setup_logger(log_level="INFO")
+    logger = get_logger(__name__)
+    config = _load_config(config_path)
+
+    try:
+        import torch
+    except ImportError:
+        logger.warning("PyTorch is not installed in this environment.")
+        return []
+
+    logger.info(f"Configured device_ids: {config.gpu.device_ids}")
+    logger.info(f"use_multi_gpu: {config.gpu.use_multi_gpu}")
+    logger.info(f"num_workers: {config.gpu.num_workers}")
+    logger.info(f"CUDA available: {torch.cuda.is_available()}")
+    logger.info(f"CUDA device count: {torch.cuda.device_count()}")
+
+    for device_id in range(torch.cuda.device_count()):
+        props = torch.cuda.get_device_properties(device_id)
+        logger.info(
+            f"GPU {device_id}: {props.name}, "
+            f"memory={props.total_memory / 1024**3:.1f}GB"
+        )
+
+    if not load_model:
+        logger.info("Use --load-model to instantiate one YOLO model per inference device.")
+        return []
+
+    from src.core.model_manager import MultiGPUModelManager
+
+    manager = MultiGPUModelManager(config.model, config.gpu)
+    devices = manager.get_inference_devices()
+    logger.info(f"Inference devices: {devices}")
+    manager.clear_gpu_cache()
+    return devices
+
+
+def example_config_management(output_path: str = "configs/custom_config.yaml"):
+    """설정 생성, 저장, 로드 예제."""
+    from src.utils.config import PipelineConfig
+    from src.utils.logger import get_logger, setup_logger
+
+    setup_logger(log_level="INFO")
+    logger = get_logger(__name__)
+
     config = PipelineConfig()
-    
-    # 2. 모델 초기화
-    logger.info("2. Initializing model...")
-    inference_engine = SAHIInferenceEngine(config.model, config.gpu)
-    
-    # 3. 후처리 도구 초기화
-    logger.info("3. Initializing post-processing tools...")
-    mask_converter = MaskToPolygonConverter(
-        simplification_tolerance=config.postprocessing.simplification_tolerance,
-        min_polygon_area=config.postprocessing.min_polygon_area,
-    )
-    
-    regularizer = RightAngleRegularizer(
-        tolerance_degrees=config.postprocessing.right_angle_tolerance,
-    )
-    
-    vector_writer = VectorFileWriter(output_dir=str(config.data.output_dir))
-    
-    # 4. 샘플 입력 이미지 생성 (실제로는 GeoTIFF 로드)
-    logger.info("4. Creating sample image...")
-    sample_image = np.random.randint(0, 255, (2048, 2048, 3), dtype=np.uint8)
-    
-    # 5. SAHI 추론
-    logger.info("5. Running SAHI inference...")
-    inference_result = inference_engine.predict_with_slicing(
-        sample_image,
-        conf_threshold=config.model.conf_threshold,
-        iou_threshold=config.model.iou_threshold,
-    )
-    
-    masks = inference_result['masks']
-    logger.info(f"Detected {len(masks)} objects")
-    
-    # 6. 마스크 -> 폴리곤 변환
-    logger.info("6. Converting masks to polygons...")
-    polygons = mask_converter.masks_to_polygons(masks)
-    logger.info(f"Converted to {len(polygons)} polygons")
-    
-    # 7. 직각화 (선택)
-    logger.info("7. Applying right-angle regularization...")
-    polygons = regularizer.regularize_polygons(polygons)
-    
-    # 8. 메트릭 계산
-    logger.info("8. Calculating metrics...")
-    metrics_list = [GeometryUtils.calculate_building_metrics(p) for p in polygons]
-    
-    # 9. 벡터 파일 저장
-    logger.info("9. Saving vector files...")
-    
-    # GeoJSON
-    geojson_path = vector_writer.write_geojson(
-        polygons,
-        "sample_buildings",
-        properties_list=metrics_list,
-    )
-    logger.info(f"GeoJSON saved: {geojson_path}")
-    
-    # Shapefile
-    shp_path = vector_writer.write_shapefile(
-        polygons,
-        "sample_buildings",
-        properties_list=metrics_list,
-    )
-    logger.info(f"Shapefile saved: {shp_path}")
-    
-    # JSON
-    json_path = vector_writer.write_json(
-        polygons,
-        "sample_buildings",
-        properties_list=metrics_list,
-    )
-    logger.info(f"JSON saved: {json_path}")
-    
-    logger.info("Pipeline complete!")
-    
-    return {
-        'polygons': polygons,
-        'metrics': metrics_list,
-        'output_files': {
-            'geojson': geojson_path,
-            'shapefile': shp_path,
-            'json': json_path,
-        }
-    }
+    logger.info(f"Default tile_size={config.data.tile_size}")
 
-
-def example_data_loader():
-    """데이터 로더 예제"""
-    logger = get_logger(__name__)
-    
-    logger.info("Data Loader Example")
-    
-    # GeoTIFF 로더 생성
-    loader = GeoTIFFLoader(tile_size=1024, overlap_ratio=0.1)
-    logger.info("GeoTIFFLoader created")
-    
-    # 타일 그리드 정보 조회 (샘플)
-    # grid_info = loader.get_tile_grid_info("path/to/geotiff.tif")
-    # logger.info(f"Grid info: {grid_info}")
-
-
-def example_multi_gpu():
-    """Multi-GPU 설정 예제"""
-    logger = get_logger(__name__)
-    
-    import torch
-    
-    logger.info("Multi-GPU Example")
-    logger.info(f"Available GPUs: {torch.cuda.device_count()}")
-    
-    for i in range(torch.cuda.device_count()):
-        props = torch.cuda.get_device_properties(i)
-        logger.info(f"GPU {i}: {props.name} ({props.total_memory / 1024**3:.1f}GB)")
-
-
-def example_config_management():
-    """설정 관리 예제"""
-    logger = get_logger(__name__)
-    
-    logger.info("Configuration Management Example")
-    
-    # 기본 설정 생성
-    config = PipelineConfig()
-    logger.info(f"Default config: tile_size={config.data.tile_size}")
-    
-    # 설정 수정
     config.model.conf_threshold = 0.5
-    config.data.tile_size = 512
-    logger.info(f"Modified config: conf_threshold={config.model.conf_threshold}")
-    
-    # YAML 저장
-    yaml_path = "configs/custom_config.yaml"
-    config.to_yaml(yaml_path)
-    logger.info(f"Config saved to {yaml_path}")
-    
-    # YAML 로드
-    loaded_config = PipelineConfig.from_yaml(yaml_path)
-    logger.info(f"Loaded config: tile_size={loaded_config.data.tile_size}")
+    config.data.tile_size = 1024
+    config.gpu.num_workers = min(4, len(config.gpu.device_ids))
+
+    config.to_yaml(output_path)
+    logger.info(f"Config saved to {output_path}")
+
+    loaded_config = PipelineConfig.from_yaml(output_path)
+    logger.info(
+        f"Loaded config: tile_size={loaded_config.data.tile_size}, "
+        f"num_workers={loaded_config.gpu.num_workers}"
+    )
+    return loaded_config
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Building instance segmentation examples"
+    )
+    subparsers = parser.add_subparsers(dest="example_name")
+
+    full_pipeline = subparsers.add_parser("full_pipeline", help="완전한 파이프라인")
+    full_pipeline.add_argument("--input", type=str, help="GeoTIFF 파일 또는 디렉토리")
+    full_pipeline.add_argument("--config", type=str, help="YAML 설정 파일")
+
+    data_loader = subparsers.add_parser("data_loader", help="데이터 로더")
+    data_loader.add_argument("--input", type=str, help="GeoTIFF 파일")
+    data_loader.add_argument("--config", type=str, help="YAML 설정 파일")
+
+    multi_gpu = subparsers.add_parser("multi_gpu", help="Multi-GPU 설정")
+    multi_gpu.add_argument("--config", type=str, help="YAML 설정 파일")
+    multi_gpu.add_argument(
+        "--load-model",
+        action="store_true",
+        help="GPU별 모델 인스턴스 로드까지 수행",
+    )
+
+    config = subparsers.add_parser("config", help="설정 관리")
+    config.add_argument(
+        "--output",
+        type=str,
+        default="configs/custom_config.yaml",
+        help="저장할 YAML 설정 파일",
+    )
+
+    return parser
+
+
+def main() -> None:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.example_name == "full_pipeline":
+        example_full_pipeline(input_path=args.input, config_path=args.config)
+    elif args.example_name == "data_loader":
+        example_data_loader(input_path=args.input, config_path=args.config)
+    elif args.example_name == "multi_gpu":
+        example_multi_gpu(config_path=args.config, load_model=args.load_model)
+    elif args.example_name == "config":
+        example_config_management(output_path=args.output)
+    else:
+        parser.print_help()
 
 
 if __name__ == "__main__":
-    import sys
-    
-    if len(sys.argv) > 1:
-        example_name = sys.argv[1]
-        
-        if example_name == "full_pipeline":
-            example_full_pipeline()
-        elif example_name == "data_loader":
-            example_data_loader()
-        elif example_name == "multi_gpu":
-            example_multi_gpu()
-        elif example_name == "config":
-            example_config_management()
-        else:
-            print("Unknown example. Available examples:")
-            print("  - full_pipeline: 완전한 파이프라인")
-            print("  - data_loader: 데이터 로더")
-            print("  - multi_gpu: Multi-GPU 설정")
-            print("  - config: 설정 관리")
-    else:
-        print("Usage: python examples.py <example_name>")
-        print("\nAvailable examples:")
-        print("  - full_pipeline: 완전한 파이프라인")
-        print("  - data_loader: 데이터 로더")
-        print("  - multi_gpu: Multi-GPU 설정")
-        print("  - config: 설정 관리")
+    main()

@@ -1,4 +1,5 @@
 """전체 파이프라인 통합"""
+import argparse
 import numpy as np
 from typing import List, Dict, Any
 from pathlib import Path
@@ -299,29 +300,60 @@ class BuildingSegmentationPipeline:
         logger.info("Pipeline cleanup complete")
 
 
+def parse_args() -> argparse.Namespace:
+    """CLI 인자 파싱"""
+    parser = argparse.ArgumentParser(
+        description="Building instance segmentation pipeline"
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="YAML 설정 파일 경로. 미지정 시 configs/phase1_yolov8.yaml이 있으면 사용",
+    )
+    parser.add_argument(
+        "--input",
+        type=str,
+        default=None,
+        help="처리할 GeoTIFF 파일 또는 디렉토리. 미지정 시 config.data.data_dir 사용",
+    )
+    return parser.parse_args()
+
+
+def load_pipeline_config(config_path: str = None) -> PipelineConfig:
+    """CLI 설정 로드"""
+    if config_path:
+        return PipelineConfig.from_yaml(config_path)
+    
+    default_config = Path("configs/phase1_yolov8.yaml")
+    if default_config.exists():
+        return PipelineConfig.from_yaml(str(default_config))
+    
+    return PipelineConfig()
+
+
 def main():
     """메인 엔트리 포인트 (Phase 1)"""
-    # 기본 설정 로드
-    config = PipelineConfig()
+    args = parse_args()
+    config = load_pipeline_config(args.config)
+    input_path = Path(args.input) if args.input else config.data.data_dir
     
-    # 필요시 YAML에서 로드
-    # config = PipelineConfig.from_yaml("configs/phase1_yolov8.yaml")
+    if not input_path.exists():
+        setup_logger(
+            log_dir=str(config.data.output_dir / "logs"),
+            log_level=config.log_level,
+        )
+        logger.warning(f"Input path not found: {input_path}")
+        logger.info("Creating sample config for reference...")
+        config.to_yaml("configs/phase1_yolov8.yaml")
+        return
     
-    # 파이프라인 생성
     pipeline = BuildingSegmentationPipeline(config)
-    
     try:
-        # 데이터 디렉토리 설정
-        input_dir = config.data.data_dir
-        
-        if not Path(input_dir).exists():
-            logger.warning(f"Input directory not found: {input_dir}")
-            logger.info("Creating sample config for reference...")
-            config.to_yaml("configs/phase1_yolov8.yaml")
-            return
-        
-        # 처리 수행
-        results = pipeline.process_directory(str(input_dir))
+        if input_path.is_file():
+            results = [pipeline.process_geotiff(str(input_path))]
+        else:
+            results = pipeline.process_directory(str(input_path))
         
         # 결과 요약
         total_buildings = sum(r['num_buildings'] for r in results)
