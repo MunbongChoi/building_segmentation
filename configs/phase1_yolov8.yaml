@@ -1,0 +1,60 @@
+# Phase 1: YOLOv8-Seg + SAHI Configuration
+# Building Instance Segmentation Pipeline
+
+# 데이터 설정
+data:
+  data_dir: ./data
+  output_dir: ./outputs
+  tile_size: 1024
+  overlap_ratio: 0.1  # 10% 타일 오버랩
+  input_format: tif
+
+# 모델 설정
+model:
+  # YOLOv8-Seg 모델 (크기 선택)
+  # yolov8n-seg: 나노 (빠름, 경량)
+  # yolov8s-seg: 소형 (균형)
+  # yolov8m-seg: 중형 (추천)
+  # yolov8l-seg: 대형 (정밀, 느림)
+  model_name: yolov8m-seg
+  model_weights: yolov8m-seg.pt  # Ultralytics Hub에서 자동 다운로드
+
+  # 신뢰도 및 IOU 임계값
+  conf_threshold: 0.4  # 높을수록 엄격함 (보수적)
+  iou_threshold: 0.5
+
+  # SAHI 슬라이싱 설정
+  sahi_slice_height: 1024
+  sahi_slice_width: 1024
+  sahi_overlap_height_ratio: 0.1  # 10% 오버랩
+  sahi_overlap_width_ratio: 0.1
+  
+  # NMS 설정
+  mask_nms_threshold: 0.5
+
+# GPU 설정
+gpu:
+  device_ids: [0, 1, 2, 3]  # RTX 4090 x 4
+  use_multi_gpu: true
+  batch_size: 1  # SAHI는 배치 처리 미지원
+  num_workers: 4
+  pin_memory: true
+
+# 후처리 설정
+postprocessing:
+  # Douglas-Peucker 단순화
+  simplification_tolerance: 1.0  # 픽셀 단위 (낮을수록 정밀)
+
+  # 직각화
+  enable_right_angle_regularization: true
+  right_angle_tolerance: 5.0  # 도(degree)
+
+  # 최소 폴리곤 면적 필터
+  min_polygon_area: 100.0  # 픽셀^2
+
+  # 출력 포맷
+  output_formats: [geojson, shapefile, json]
+
+# 파이프라인 설정
+log_level: INFO  # DEBUG, INFO, WARNING, ERROR
+save_intermediate: false  # 중간 결과 저장 여부 (디버깅용)

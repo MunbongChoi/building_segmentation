@@ -1,0 +1,163 @@
+"""유틸리티 스크립트"""
+import argparse
+import sys
+from pathlib import Path
+import shutil
+
+from src.utils.config import PipelineConfig
+from src.utils.logger import setup_logger, get_logger
+
+
+def setup_directories(config: PipelineConfig) -> None:
+    """필요한 디렉토리 생성"""
+    logger = get_logger(__name__)
+    
+    dirs = [
+        config.data.data_dir,
+        config.data.output_dir,
+        config.data.output_dir / "logs",
+        Path("configs"),
+    ]
+    
+    for dir_path in dirs:
+        dir_path.mkdir(parents=True, exist_ok=True)
+        logger.info(f"Directory ready: {dir_path}")
+
+
+def create_sample_config(output_path: str = "configs/phase1_yolov8.yaml") -> None:
+    """샘플 설정 파일 생성"""
+    logger = get_logger(__name__)
+    
+    config = PipelineConfig()
+    config.to_yaml(output_path)
+    
+    logger.info(f"Sample config created: {output_path}")
+
+
+def download_model_weights(model_name: str = "yolov8m-seg") -> None:
+    """YOLOv8 모델 가중치 다운로드"""
+    logger = get_logger(__name__)
+    
+    try:
+        from ultralytics import YOLO
+        
+        logger.info(f"Downloading {model_name}...")
+        model = YOLO(f"{model_name}.pt")
+        logger.info(f"Model downloaded successfully: {model_name}.pt")
+    except Exception as e:
+        logger.error(f"Failed to download model: {e}")
+
+
+def validate_environment() -> None:
+    """환경 검증"""
+    logger = get_logger(__name__)
+    
+    import torch
+    import rasterio
+    import cv2
+    import numpy as np
+    
+    logger.info("=== Environment Validation ===")
+    
+    # PyTorch
+    logger.info(f"PyTorch: {torch.__version__}")
+    logger.info(f"CUDA available: {torch.cuda.is_available()}")
+    
+    if torch.cuda.is_available():
+        logger.info(f"CUDA version: {torch.version.cuda}")
+        logger.info(f"GPUs: {torch.cuda.device_count()}")
+        
+        for i in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(i)
+            logger.info(f"  - GPU {i}: {props.name} ({props.total_memory / 1024**3:.1f}GB)")
+    
+    # Rasterio
+    logger.info(f"Rasterio: {rasterio.__version__}")
+    
+    # OpenCV
+    logger.info(f"OpenCV: {cv2.__version__}")
+    
+    # NumPy
+    logger.info(f"NumPy: {np.__version__}")
+    
+    logger.info("=== Environment Valid ===")
+
+
+def cleanup_outputs(output_dir: str = "./outputs") -> None:
+    """출력 디렉토리 정리"""
+    logger = get_logger(__name__)
+    
+    output_path = Path(output_dir)
+    
+    if output_path.exists():
+        response = input(f"Delete all files in {output_dir}? (y/n): ")
+        if response.lower() == 'y':
+            shutil.rmtree(output_path)
+            output_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Cleaned up: {output_dir}")
+        else:
+            logger.info("Cleanup cancelled")
+    else:
+        logger.info(f"Directory not found: {output_dir}")
+
+
+def main():
+    """메인 유틸리티"""
+    parser = argparse.ArgumentParser(
+        description="Building Segmentation Pipeline Utilities"
+    )
+    
+    subparsers = parser.add_subparsers(dest="command", help="Commands")
+    
+    # setup 커맨드
+    subparsers.add_parser("setup", help="Setup directories and create sample config")
+    
+    # validate 커맨드
+    subparsers.add_parser("validate", help="Validate environment")
+    
+    # download 커맨드
+    download_parser = subparsers.add_parser("download", help="Download model weights")
+    download_parser.add_argument(
+        "--model",
+        type=str,
+        default="yolov8m-seg",
+        help="Model name (default: yolov8m-seg)"
+    )
+    
+    # cleanup 커맨드
+    cleanup_parser = subparsers.add_parser("cleanup", help="Clean up outputs")
+    cleanup_parser.add_argument(
+        "--dir",
+        type=str,
+        default="./outputs",
+        help="Output directory (default: ./outputs)"
+    )
+    
+    args = parser.parse_args()
+    
+    # 로깅 설정
+    setup_logger(log_level="INFO")
+    logger = get_logger(__name__)
+    
+    if args.command == "setup":
+        logger.info("Running setup...")
+        config = PipelineConfig()
+        setup_directories(config)
+        create_sample_config()
+        logger.info("Setup complete!")
+    
+    elif args.command == "validate":
+        validate_environment()
+    
+    elif args.command == "download":
+        download_model_weights(args.model)
+    
+    elif args.command == "cleanup":
+        cleanup_outputs(args.dir)
+    
+    else:
+        parser.print_help()
+
+
+if __name__ == "__main__":
+    main()
