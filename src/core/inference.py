@@ -587,11 +587,15 @@ class SAHIInferenceEngine:
                 iou_threshold,
             )
         
+        box_count = len(merged_boxes)
         return {
             'masks': merged_masks,
-            'boxes': np.array(merged_boxes) if merged_boxes else np.empty((0, 4)),
-            'scores': np.array(merged_scores) if merged_scores else np.empty(0),
-            'class_ids': np.array(merged_class_ids) if merged_class_ids else np.empty(0, dtype=int),
+            'boxes': np.asarray(merged_boxes) if box_count else np.empty((0, 4)),
+            'scores': np.asarray(merged_scores) if box_count else np.empty(0),
+            'class_ids': (
+                np.asarray(merged_class_ids, dtype=int)
+                if box_count else np.empty(0, dtype=int)
+            ),
             'image_height': image_height,
             'image_width': image_width,
         }

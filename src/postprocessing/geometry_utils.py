@@ -2,12 +2,10 @@
 import json
 import numpy as np
 from pathlib import Path
-from typing import List, Dict, Any
-from shapely.geometry import Polygon, mapping
-from shapely.affinity import rotate
+from typing import List, Dict, Any, Union
+from shapely.geometry import MultiPolygon, Polygon, mapping
 from shapely.ops import transform as shapely_transform
 import geopandas as gpd
-from functools import lru_cache
 
 from ..utils.logger import logger
 
@@ -17,7 +15,7 @@ class GeometryUtils:
     
     @staticmethod
     def polygon_to_geojson_feature(
-        polygon: Polygon,
+        polygon: Union[Polygon, MultiPolygon],
         properties: Dict[str, Any] = None,
         feature_id: int = 0,
     ) -> Dict[str, Any]:
@@ -46,12 +44,29 @@ class GeometryUtils:
         }
     
     @staticmethod
-    def polygon_to_coords_list(polygon: Polygon) -> List[List[float]]:
+    def polygon_to_coords_list(polygon: Union[Polygon, MultiPolygon]) -> Any:
         """폴리곤을 좌표 리스트로 변환"""
+        if isinstance(polygon, MultiPolygon):
+            return [
+                list(part.exterior.coords)
+                for part in polygon.geoms
+                if isinstance(part, Polygon) and not part.is_empty
+            ]
         return list(polygon.exterior.coords)
+
+    @staticmethod
+    def polygon_to_segmentation(polygon: Union[Polygon, MultiPolygon]) -> List[List[float]]:
+        """COCO polygon segmentation 형식으로 변환"""
+        if isinstance(polygon, MultiPolygon):
+            return [
+                np.asarray(part.exterior.coords).ravel().tolist()
+                for part in polygon.geoms
+                if isinstance(part, Polygon) and not part.is_empty
+            ]
+        return [np.asarray(polygon.exterior.coords).ravel().tolist()]
     
     @staticmethod
-    def calculate_building_metrics(polygon: Polygon) -> Dict[str, float]:
+    def calculate_building_metrics(polygon: Union[Polygon, MultiPolygon]) -> Dict[str, float]:
         """건물 폴리곤의 메트릭 계산"""
         minx, miny, maxx, maxy = polygon.bounds
         width = maxx - minx
@@ -69,7 +84,10 @@ class GeometryUtils:
         }
 
     @staticmethod
-    def pixel_polygon_to_geo(polygon: Polygon, affine_transform: Any) -> Polygon:
+    def pixel_polygon_to_geo(
+        polygon: Union[Polygon, MultiPolygon],
+        affine_transform: Any,
+    ) -> Union[Polygon, MultiPolygon]:
         """픽셀 좌표계 폴리곤을 GeoTIFF 원본 좌표계로 변환"""
         def _transform(x, y, z=None):
             pixel_x = np.asarray(x)
@@ -83,7 +101,10 @@ class GeometryUtils:
         return shapely_transform(_transform, polygon)
 
     @staticmethod
-    def pixel_polygons_to_geo(polygons: List[Polygon], affine_transform: Any) -> List[Polygon]:
+    def pixel_polygons_to_geo(
+        polygons: List[Union[Polygon, MultiPolygon]],
+        affine_transform: Any,
+    ) -> List[Union[Polygon, MultiPolygon]]:
         """픽셀 좌표계 폴리곤 목록을 GeoTIFF 원본 좌표계로 변환"""
         return [
             GeometryUtils.pixel_polygon_to_geo(polygon, affine_transform)
@@ -110,7 +131,7 @@ class VectorFileWriter:
     
     def write_geojson(
         self,
-        polygons: List[Polygon],
+        polygons: List[Union[Polygon, MultiPolygon]],
         filename: str,
         properties_list: List[Dict] = None,
     ) -> str:
@@ -150,7 +171,7 @@ class VectorFileWriter:
     
     def write_shapefile(
         self,
-        polygons: List[Polygon],
+        polygons: List[Union[Polygon, MultiPolygon]],
         filename: str,
         properties_list: List[Dict] = None,
     ) -> str:
@@ -192,7 +213,7 @@ class VectorFileWriter:
     
     def write_json(
         self,
-        polygons: List[Polygon],
+        polygons: List[Union[Polygon, MultiPolygon]],
         filename: str,
         properties_list: List[Dict] = None,
     ) -> str:
@@ -227,7 +248,7 @@ class VectorFileWriter:
     
     def write_coco_json(
         self,
-        polygons: List[Polygon],
+        polygons: List[Union[Polygon, MultiPolygon]],
         image_path: str,
         filename: str,
     ) -> str:
@@ -243,7 +264,7 @@ class VectorFileWriter:
                 'category_id': 1,  # Building
                 'area': polygon.area,
                 'bbox': list(polygon.bounds),  # [x_min, y_min, x_max, y_max]
-                'segmentation': [GeometryUtils.polygon_to_coords_list(polygon)],
+                'segmentation': GeometryUtils.polygon_to_segmentation(polygon),
                 'iscrowd': 0,
             }
             annotations.append(annotation)
