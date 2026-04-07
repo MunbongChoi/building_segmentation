@@ -44,6 +44,10 @@ class ModelConfig:
 class GPUConfig:
     """GPU 병렬 처리 설정"""
     device_ids: List[int] = field(default_factory=lambda: [0, 1, 2, 3])  # 4x RTX 4090
+    device: str = "cuda"  # cuda, cpu, auto
+    require_cuda: bool = True
+    allow_cpu_fallback: bool = False
+    cuda_visible_devices: str = ""  # 예: "0,1,2,3". 비우면 환경값 유지
     use_multi_gpu: bool = True
     batch_size: int = 1  # SAHI는 일반적으로 배치 처리 미지원
     num_workers: int = 4
@@ -172,6 +176,10 @@ class PipelineConfig:
             'sahi_overlap_width_ratio': (self.model, 'sahi_overlap_width_ratio'),
             'mask_nms_threshold': (self.model, 'mask_nms_threshold'),
             'device_ids': (self.gpu, 'device_ids'),
+            'device': (self.gpu, 'device'),
+            'require_cuda': (self.gpu, 'require_cuda'),
+            'allow_cpu_fallback': (self.gpu, 'allow_cpu_fallback'),
+            'cuda_visible_devices': (self.gpu, 'cuda_visible_devices'),
             'use_multi_gpu': (self.gpu, 'use_multi_gpu'),
             'num_workers': (self.gpu, 'num_workers'),
             'batch_size': (self.gpu, 'batch_size'),

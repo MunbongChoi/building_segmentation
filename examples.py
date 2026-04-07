@@ -108,6 +108,10 @@ def example_multi_gpu(config_path: Optional[str] = None, load_model: bool = Fals
         return []
 
     logger.info(f"Configured device_ids: {config.gpu.device_ids}")
+    logger.info(f"device: {config.gpu.device}")
+    logger.info(f"require_cuda: {config.gpu.require_cuda}")
+    logger.info(f"allow_cpu_fallback: {config.gpu.allow_cpu_fallback}")
+    logger.info(f"cuda_visible_devices: {config.gpu.cuda_visible_devices or '<env>'}")
     logger.info(f"use_multi_gpu: {config.gpu.use_multi_gpu}")
     logger.info(f"num_workers: {config.gpu.num_workers}")
     logger.info(f"CUDA available: {torch.cuda.is_available()}")

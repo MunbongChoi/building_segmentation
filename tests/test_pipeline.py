@@ -172,6 +172,9 @@ class TestPipelineConfig:
         assert config.data.tile_size == 1024
         assert config.model.conf_threshold == 0.4
         assert len(config.gpu.device_ids) == 4
+        assert config.gpu.device == "cuda"
+        assert config.gpu.require_cuda is True
+        assert config.gpu.allow_cpu_fallback is False
         assert config.postprocessing.simplification_tolerance == 1.0
         assert config.augmentation.enable_tta is False
     
@@ -201,6 +204,9 @@ model:
 hyperparameters:
   conf_threshold: 0.7
   tile_size: 512
+  device: cpu
+  require_cuda: false
+  allow_cpu_fallback: true
   enable_tta: true
   tta_scales: [1.0, 1.25]
 augmentation:
@@ -213,6 +219,9 @@ augmentation:
         
         assert loaded_config.model.conf_threshold == 0.7
         assert loaded_config.data.tile_size == 512
+        assert loaded_config.gpu.device == "cpu"
+        assert loaded_config.gpu.require_cuda is False
+        assert loaded_config.gpu.allow_cpu_fallback is True
         assert loaded_config.augmentation.enable_tta is True
         assert loaded_config.augmentation.tta_scales == [1.0, 1.25]
 

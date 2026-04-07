@@ -1,14 +1,19 @@
 """유틸리티 스크립트"""
 import argparse
+import os
+import subprocess
 import sys
 from pathlib import Path
 import shutil
+from typing import TYPE_CHECKING
 
-from src.utils.config import PipelineConfig
 from src.utils.logger import setup_logger, get_logger
 
+if TYPE_CHECKING:
+    from src.utils.config import PipelineConfig
 
-def setup_directories(config: PipelineConfig) -> None:
+
+def setup_directories(config: "PipelineConfig") -> None:
     """필요한 디렉토리 생성"""
     logger = get_logger(__name__)
     
@@ -27,6 +32,7 @@ def setup_directories(config: PipelineConfig) -> None:
 def create_sample_config(output_path: str = "configs/phase1_yolov8.yaml") -> None:
     """샘플 설정 파일 생성"""
     logger = get_logger(__name__)
+    from src.utils.config import PipelineConfig
     
     config = PipelineConfig()
     config.to_yaml(output_path)
@@ -52,35 +58,73 @@ def validate_environment() -> None:
     """환경 검증"""
     logger = get_logger(__name__)
     
-    import torch
-    import rasterio
-    import cv2
-    import numpy as np
-    
     logger.info("=== Environment Validation ===")
+    logger.info(f"CUDA_VISIBLE_DEVICES: {os.environ.get('CUDA_VISIBLE_DEVICES', '<unset>')}")
     
     # PyTorch
-    logger.info(f"PyTorch: {torch.__version__}")
-    logger.info(f"CUDA available: {torch.cuda.is_available()}")
-    
-    if torch.cuda.is_available():
-        logger.info(f"CUDA version: {torch.version.cuda}")
-        logger.info(f"GPUs: {torch.cuda.device_count()}")
+    try:
+        import torch
+        logger.info(f"PyTorch: {torch.__version__}")
+        logger.info(f"PyTorch CUDA build: {torch.version.cuda}")
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
+        logger.info(f"CUDA device count: {torch.cuda.device_count()}")
         
-        for i in range(torch.cuda.device_count()):
-            props = torch.cuda.get_device_properties(i)
-            logger.info(f"  - GPU {i}: {props.name} ({props.total_memory / 1024**3:.1f}GB)")
+        if torch.cuda.is_available():
+            for i in range(torch.cuda.device_count()):
+                props = torch.cuda.get_device_properties(i)
+                logger.info(f"  - GPU {i}: {props.name} ({props.total_memory / 1024**3:.1f}GB)")
+        else:
+            logger.error(
+                "CUDA is not available to PyTorch. Install a CUDA-enabled torch build "
+                "and check the NVIDIA driver/container runtime."
+            )
+    except ImportError:
+        logger.error("PyTorch is not installed.")
+    
+    nvidia_smi = shutil.which("nvidia-smi")
+    if nvidia_smi:
+        result = subprocess.run(
+            [
+                nvidia_smi,
+                "--query-gpu=index,name,memory.total,driver_version",
+                "--format=csv,noheader",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+        if result.returncode == 0:
+            logger.info("nvidia-smi GPUs:")
+            for line in result.stdout.strip().splitlines():
+                logger.info(f"  {line}")
+        else:
+            logger.error(f"nvidia-smi failed: {result.stderr.strip()}")
+    else:
+        logger.error("nvidia-smi not found in PATH.")
     
     # Rasterio
-    logger.info(f"Rasterio: {rasterio.__version__}")
+    try:
+        import rasterio
+        logger.info(f"Rasterio: {rasterio.__version__}")
+    except ImportError:
+        logger.error("Rasterio is not installed.")
     
     # OpenCV
-    logger.info(f"OpenCV: {cv2.__version__}")
+    try:
+        import cv2
+        logger.info(f"OpenCV: {cv2.__version__}")
+    except ImportError:
+        logger.error("OpenCV is not installed.")
     
     # NumPy
-    logger.info(f"NumPy: {np.__version__}")
+    try:
+        import numpy as np
+        logger.info(f"NumPy: {np.__version__}")
+    except ImportError:
+        logger.error("NumPy is not installed.")
     
-    logger.info("=== Environment Valid ===")
+    logger.info("=== Environment Validation Complete ===")
 
 
 def cleanup_outputs(output_dir: str = "./outputs") -> None:
@@ -141,6 +185,8 @@ def main():
     
     if args.command == "setup":
         logger.info("Running setup...")
+        from src.utils.config import PipelineConfig
+        
         config = PipelineConfig()
         setup_directories(config)
         create_sample_config()
