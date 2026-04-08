@@ -159,9 +159,10 @@ class VectorFileWriter:
         
         geojson = {
             'type': 'FeatureCollection',
-            'crs': {'type': 'name', 'properties': {'name': self.crs}},
             'features': features,
         }
+        if self.crs:
+            geojson['crs'] = {'type': 'name', 'properties': {'name': self.crs}}
         
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(geojson, f, indent=2, ensure_ascii=False)

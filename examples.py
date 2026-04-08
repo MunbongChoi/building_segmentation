@@ -1,7 +1,8 @@
 """Phase 1 파이프라인 사용 예제.
 
-예제는 실제 구현 경로를 호출한다. 즉, full_pipeline은 GeoTIFF를 window 단위로
-읽고, 타일/GPU 병렬 추론, 마스크 병합, 픽셀->GIS 좌표 변환, 벡터 저장까지 수행한다.
+예제는 실제 구현 경로를 호출한다. 즉, full_pipeline은 PNG/JPEG/GeoTIFF를 tile 단위로
+읽고, 타일/GPU 병렬 추론, 마스크 병합, 벡터/마스크 overlay 저장까지 수행한다.
+GeoTIFF는 GIS 좌표로, PNG/JPEG는 픽셀 좌표로 저장한다.
 """
 import argparse
 from pathlib import Path
@@ -35,7 +36,7 @@ def example_full_pipeline(input_path: Optional[str] = None, config_path: Optiona
     if not target_path.exists():
         raise FileNotFoundError(
             f"Input path not found: {target_path}. "
-            "GeoTIFF 파일을 data/에 넣거나 --input 경로를 지정하세요."
+            "PNG 파일들을 data/에 넣거나 --input 경로를 지정하세요."
         )
 
     pipeline = BuildingSegmentationPipeline(config)
@@ -48,7 +49,7 @@ def example_full_pipeline(input_path: Optional[str] = None, config_path: Optiona
 
 
 def example_data_loader(input_path: Optional[str] = None, config_path: Optional[str] = None):
-    """windowed GeoTIFF 데이터 로더 예제."""
+    """PNG/JPEG/GeoTIFF 데이터 로더 예제."""
     from src.core.dataset import GeoTIFFLoader
     from src.utils.logger import get_logger, setup_logger
 
@@ -66,12 +67,12 @@ def example_data_loader(input_path: Optional[str] = None, config_path: Optional[
     )
 
     if not input_path:
-        logger.info("Use --input <geotiff_path> to inspect metadata and tile windows.")
+        logger.info("Use --input <image_path> to inspect metadata and tile windows.")
         return None
 
     path = Path(input_path)
     if not path.exists() or not path.is_file():
-        raise FileNotFoundError(f"GeoTIFF file not found: {path}")
+        raise FileNotFoundError(f"Image file not found: {path}")
 
     metadata = loader.load_metadata(str(path))
     grid_info = loader.get_tile_grid_info(str(path))
@@ -187,11 +188,11 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="example_name")
 
     full_pipeline = subparsers.add_parser("full_pipeline", help="완전한 파이프라인")
-    full_pipeline.add_argument("--input", type=str, help="GeoTIFF 파일 또는 디렉토리")
+    full_pipeline.add_argument("--input", type=str, help="PNG/JPEG/GeoTIFF 파일 또는 디렉토리")
     full_pipeline.add_argument("--config", type=str, help="YAML 설정 파일")
 
     data_loader = subparsers.add_parser("data_loader", help="데이터 로더")
-    data_loader.add_argument("--input", type=str, help="GeoTIFF 파일")
+    data_loader.add_argument("--input", type=str, help="PNG/JPEG/GeoTIFF 파일")
     data_loader.add_argument("--config", type=str, help="YAML 설정 파일")
 
     multi_gpu = subparsers.add_parser("multi_gpu", help="Multi-GPU 설정")

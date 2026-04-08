@@ -7,12 +7,13 @@ import numpy as np
 import rasterio
 from rasterio.enums import Resampling
 
+from ..core.dataset import RASTER_IMAGE_EXTENSIONS
 from ..utils.config import VisualizationConfig
 from ..utils.logger import logger
 
 
 class MaskVisualizer:
-    """대용량 GeoTIFF 위에 인스턴스 마스크를 축소 오버레이로 저장"""
+    """원본 이미지 위에 인스턴스 마스크를 축소 오버레이로 저장"""
     
     def __init__(
         self,
@@ -59,7 +60,10 @@ class MaskVisualizer:
         return output_files
     
     def _load_preview(self, geotiff_path: str) -> Tuple[np.ndarray, float, float]:
-        """GeoTIFF를 preview 크기로 축소해서 RGB uint8로 읽는다."""
+        """이미지를 preview 크기로 축소해서 RGB uint8로 읽는다."""
+        if Path(geotiff_path).suffix.lower() in RASTER_IMAGE_EXTENSIONS:
+            return self._load_raster_preview(geotiff_path)
+        
         with rasterio.open(geotiff_path) as src:
             original_width = src.width
             original_height = src.height
@@ -77,11 +81,42 @@ class MaskVisualizer:
         scale_x = preview_width / original_width
         scale_y = preview_height / original_height
         return image, scale_x, scale_y
+
+    def _load_raster_preview(self, image_path: str) -> Tuple[np.ndarray, float, float]:
+        """PNG/JPEG 등 일반 이미지를 preview 크기로 로드"""
+        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+        if image is None:
+            raise FileNotFoundError(f"Failed to read image: {image_path}")
+        
+        if image.ndim == 2:
+            image = cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        elif image.shape[-1] == 3:
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        elif image.shape[-1] == 4:
+            image = cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+        elif image.shape[-1] > 3:
+            image = image[..., :3]
+        
+        image = self._chw_to_rgb_uint8(image)
+        original_height, original_width = image.shape[:2]
+        max_size = max(1, int(self.config.max_preview_size))
+        ratio = min(1.0, max_size / max(original_width, original_height))
+        preview_width = max(1, int(round(original_width * ratio)))
+        preview_height = max(1, int(round(original_height * ratio)))
+        
+        if ratio < 1.0:
+            image = cv2.resize(
+                image,
+                (preview_width, preview_height),
+                interpolation=cv2.INTER_AREA,
+            )
+        
+        return image, preview_width / original_width, preview_height / original_height
     
     @staticmethod
     def _chw_to_rgb_uint8(image: np.ndarray) -> np.ndarray:
         """Rasterio CHW 배열을 RGB uint8 HWC 배열로 변환"""
-        if image.ndim == 3:
+        if image.ndim == 3 and image.shape[0] <= 4 and image.shape[-1] > 4:
             image = np.transpose(image, (1, 2, 0))
         
         if image.ndim == 2:

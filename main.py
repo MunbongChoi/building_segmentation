@@ -5,7 +5,7 @@ from typing import List, Dict, Any
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from src.core.dataset import GeoTIFFLoader, GeoTile
+from src.core.dataset import GeoTIFFLoader, GeoTile, SUPPORTED_IMAGE_EXTENSIONS
 from src.core.inference import SAHIInferenceEngine
 from src.postprocessing.mask_to_polygon import MaskToPolygonConverter, RightAngleRegularizer
 from src.postprocessing.geometry_utils import VectorFileWriter, GeometryUtils
@@ -70,25 +70,33 @@ class BuildingSegmentationPipeline:
         logger.info("Pipeline initialized successfully")
     
     def process_geotiff(self, geotiff_path: str) -> Dict[str, Any]:
-        """단일 GeoTIFF 파일 처리
+        """이전 호환용. 단일 이미지 파일 처리로 위임"""
+        return self.process_image(str(geotiff_path))
+
+    def process_image(self, image_path: str) -> Dict[str, Any]:
+        """단일 PNG/JPEG/GeoTIFF 파일 처리
         
         Args:
-            geotiff_path: 입력 GeoTIFF 파일 경로
+            image_path: 입력 이미지 파일 경로
             
         Returns:
             처리 결과 (폴리곤, 통계 등)
         """
-        logger.info(f"Processing: {geotiff_path}")
+        logger.info(f"Processing: {image_path}")
         
-        # 1. GeoTIFF 메타데이터 로드. 실제 영상은 window 단위로 읽는다.
-        geo_data = self.data_loader.load_metadata(geotiff_path)
+        # 1. 이미지 메타데이터 로드. 실제 영상은 window/tile 단위로 읽는다.
+        geo_data = self.data_loader.load_metadata(image_path)
         crs = geo_data['crs']
         transform = geo_data['transform']
         image_width = geo_data['width']
         image_height = geo_data['height']
-        self.vector_writer.crs = str(crs) if crs else "EPSG:4326"
+        self.vector_writer.crs = str(crs) if crs else None
         
-        logger.info(f"Image size: {image_width}x{image_height}, CRS: {self.vector_writer.crs}")
+        coordinate_mode = "geo" if transform is not None else "pixel"
+        logger.info(
+            f"Image size: {image_width}x{image_height}, "
+            f"coordinate_mode={coordinate_mode}, CRS={self.vector_writer.crs}"
+        )
         
         # 2. Windowed tile 기반 추론
         all_masks = []
@@ -100,7 +108,7 @@ class BuildingSegmentationPipeline:
         devices = devices[:max(1, min(len(devices), self.config.gpu.num_workers))]
         tile_batch = []
         
-        for tile in self.data_loader.tile_geotiff(geotiff_path):
+        for tile in self.data_loader.tile_image(image_path):
             tile_batch.append(tile)
             if len(tile_batch) < len(devices):
                 continue
@@ -154,13 +162,13 @@ class BuildingSegmentationPipeline:
         
         masks = inference_result['masks']
         logger.info(f"Processed {tile_count} tiles; detected {len(masks)} buildings")
-        output_basename = Path(geotiff_path).stem
+        output_basename = Path(image_path).stem
         output_files = {}
         
         if self.config.visualization.enabled:
             output_files.update(
                 self.mask_visualizer.save_mask_preview(
-                    geotiff_path,
+                    image_path,
                     masks,
                     output_basename,
                 )
@@ -176,50 +184,55 @@ class BuildingSegmentationPipeline:
             logger.info("Applied right-angle regularization")
         
         pixel_polygons = polygons
-        geo_polygons = GeometryUtils.pixel_polygons_to_geo(pixel_polygons, transform)
+        output_polygons = (
+            GeometryUtils.pixel_polygons_to_geo(pixel_polygons, transform)
+            if transform is not None else pixel_polygons
+        )
         
         # 6. 메트릭 계산
         metrics_list = []
-        for pixel_polygon, geo_polygon in zip(pixel_polygons, geo_polygons):
-            metrics = GeometryUtils.calculate_building_metrics(geo_polygon)
+        for pixel_polygon, output_polygon in zip(pixel_polygons, output_polygons):
+            metrics = GeometryUtils.calculate_building_metrics(output_polygon)
             pixel_metrics = GeometryUtils.calculate_building_metrics(pixel_polygon)
             metrics['pixel_area'] = pixel_metrics['area']
             metrics['pixel_perimeter'] = pixel_metrics['perimeter']
+            metrics['coordinate_mode'] = coordinate_mode
             metrics_list.append(metrics)
         
         # 7. 벡터 파일 저장
         if 'geojson' in self.config.postprocessing.output_formats:
             output_files['geojson'] = self.vector_writer.write_geojson(
-                geo_polygons,
+                output_polygons,
                 output_basename,
                 properties_list=metrics_list,
             )
         
         if 'shapefile' in self.config.postprocessing.output_formats:
             output_files['shapefile'] = self.vector_writer.write_shapefile(
-                geo_polygons,
+                output_polygons,
                 output_basename,
                 properties_list=metrics_list,
             )
         
         if 'json' in self.config.postprocessing.output_formats:
             output_files['json'] = self.vector_writer.write_json(
-                geo_polygons,
+                output_polygons,
                 output_basename,
                 properties_list=metrics_list,
             )
         
         # 8. 결과 요약
         result = {
-            'input_file': geotiff_path,
-            'num_buildings': len(geo_polygons),
-            'polygons': geo_polygons,
+            'input_file': image_path,
+            'num_buildings': len(output_polygons),
+            'polygons': output_polygons,
             'pixel_polygons': pixel_polygons,
             'metrics': metrics_list,
             'output_files': output_files,
             'inference_result': inference_result,
             'crs': crs,
             'transform': transform,
+            'coordinate_mode': coordinate_mode,
         }
         
         logger.info(f"Processing complete: {len(polygons)} buildings detected and saved")
@@ -291,7 +304,7 @@ class BuildingSegmentationPipeline:
         )
     
     def process_directory(self, input_dir: str) -> List[Dict[str, Any]]:
-        """디렉토리 내 모든 GeoTIFF 처리
+        """디렉토리 내 모든 지원 이미지 처리
         
         Args:
             input_dir: 입력 디렉토리
@@ -300,18 +313,22 @@ class BuildingSegmentationPipeline:
             각 파일의 처리 결과 리스트
         """
         input_path = Path(input_dir)
-        geotiff_files = list(input_path.glob("*.tif*")) + list(input_path.glob("*.geotiff"))
+        image_files = sorted(
+            path
+            for path in input_path.iterdir()
+            if path.is_file() and path.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
+        )
         
-        logger.info(f"Found {len(geotiff_files)} GeoTIFF files in {input_dir}")
+        logger.info(f"Found {len(image_files)} image files in {input_dir}")
         
         results = []
-        for i, geotiff_file in enumerate(geotiff_files, 1):
+        for i, image_file in enumerate(image_files, 1):
             try:
-                logger.info(f"[{i}/{len(geotiff_files)}] Processing {geotiff_file.name}")
-                result = self.process_geotiff(str(geotiff_file))
+                logger.info(f"[{i}/{len(image_files)}] Processing {image_file.name}")
+                result = self.process_image(str(image_file))
                 results.append(result)
             except Exception as e:
-                logger.error(f"Failed to process {geotiff_file}: {e}", exc_info=True)
+                logger.error(f"Failed to process {image_file}: {e}", exc_info=True)
         
         return results
     
@@ -336,7 +353,7 @@ def parse_args() -> argparse.Namespace:
         "--input",
         type=str,
         default=None,
-        help="처리할 GeoTIFF 파일 또는 디렉토리. 미지정 시 config.data.data_dir 사용",
+        help="처리할 PNG/JPEG/GeoTIFF 파일 또는 디렉토리. 미지정 시 config.data.data_dir 사용",
     )
     return parser.parse_args()
 
@@ -372,7 +389,7 @@ def main():
     pipeline = BuildingSegmentationPipeline(config)
     try:
         if input_path.is_file():
-            results = [pipeline.process_geotiff(str(input_path))]
+            results = [pipeline.process_image(str(input_path))]
         else:
             results = pipeline.process_directory(str(input_path))
         
