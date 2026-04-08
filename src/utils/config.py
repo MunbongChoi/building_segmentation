@@ -99,6 +99,7 @@ class TrainingConfig:
     val_images: str = "data/images/val"
     train_labels: str = "data/labels/train"
     val_labels: str = "data/labels/val"
+    use_train_as_val_if_missing: bool = True
     class_names: List[str] = field(default_factory=lambda: ["building"])
 
     pretrained_weights: str = ""
@@ -307,6 +308,8 @@ class PipelineConfig:
             'val_images': (self.training, 'val_images'),
             'train_labels': (self.training, 'train_labels'),
             'val_labels': (self.training, 'val_labels'),
+            'use_train_as_val_if_missing': (self.training, 'use_train_as_val_if_missing'),
+            'train_as_val': (self.training, 'use_train_as_val_if_missing'),
             'class_names': (self.training, 'class_names'),
             'pretrained_weights': (self.training, 'pretrained_weights'),
             'epochs': (self.training, 'epochs'),

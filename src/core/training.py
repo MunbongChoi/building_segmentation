@@ -1,7 +1,7 @@
 """YOLOv8-Seg fine-tuning entrypoints."""
 import os
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import yaml
 
@@ -32,14 +32,19 @@ class YOLOSegFineTuner:
             dataset_yaml = Path(self.training_config.dataset_yaml)
             if not dataset_yaml.exists():
                 raise FileNotFoundError(f"Dataset YAML not found: {dataset_yaml}")
-            return dataset_yaml
+            return self._resolve_existing_dataset_yaml(dataset_yaml)
 
         train_images = Path(self.training_config.train_images)
         val_images = Path(self.training_config.val_images)
         train_labels = Path(self.training_config.train_labels)
         val_labels = Path(self.training_config.val_labels)
 
-        self._validate_yolo_seg_dataset(train_images, val_images, train_labels, val_labels)
+        val_images, val_labels = self._validate_yolo_seg_dataset(
+            train_images,
+            val_images,
+            train_labels,
+            val_labels,
+        )
 
         output_dir = Path(self.config.data.output_dir) / "training"
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -55,6 +60,35 @@ class YOLOSegFineTuner:
 
         logger.info(f"Generated training dataset YAML: {dataset_yaml}")
         return dataset_yaml
+
+    def _resolve_existing_dataset_yaml(self, dataset_yaml: Path) -> Path:
+        """Return an existing dataset YAML, adding val=train when val is absent."""
+        with open(dataset_yaml, "r", encoding="utf-8") as handle:
+            data = yaml.safe_load(handle) or {}
+
+        has_val = bool(data.get("val"))
+        if has_val:
+            return dataset_yaml
+
+        if not self.training_config.use_train_as_val_if_missing:
+            raise ValueError(
+                f"Dataset YAML has no validation split: {dataset_yaml}. "
+                "Set training.use_train_as_val_if_missing=true to reuse train as val."
+            )
+        if not data.get("train"):
+            raise ValueError(f"Dataset YAML has neither train nor val split: {dataset_yaml}")
+
+        data["val"] = data["train"]
+        output_dir = Path(self.config.data.output_dir) / "training"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        resolved_yaml = output_dir / "dataset_with_train_as_val.yaml"
+        with open(resolved_yaml, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=True)
+
+        logger.warning(
+            f"Dataset YAML has no validation split; generated {resolved_yaml} with val=train."
+        )
+        return resolved_yaml
 
     def train(self) -> Dict[str, Any]:
         """Run YOLOv8-Seg fine-tuning and return key output paths."""
@@ -186,12 +220,10 @@ class YOLOSegFineTuner:
         val_images: Path,
         train_labels: Path,
         val_labels: Path,
-    ) -> None:
+    ) -> Tuple[Path, Path]:
         for path, label in [
             (train_images, "training images"),
-            (val_images, "validation images"),
             (train_labels, "training labels"),
-            (val_labels, "validation labels"),
         ]:
             if not path.exists():
                 raise FileNotFoundError(f"{label} directory not found: {path}")
@@ -199,25 +231,70 @@ class YOLOSegFineTuner:
                 raise NotADirectoryError(f"{label} path is not a directory: {path}")
 
         train_count = self._count_images(train_images)
-        val_count = self._count_images(val_images)
         if train_count == 0:
             raise ValueError(f"No training images found in {train_images}")
-        if val_count == 0:
-            raise ValueError(f"No validation images found in {val_images}")
 
         missing_train = self._missing_label_files(train_images, train_labels)
-        missing_val = self._missing_label_files(val_images, val_labels)
-        missing_count = len(missing_train) + len(missing_val)
-        if missing_count:
-            examples = (missing_train + missing_val)[:5]
+        if missing_train:
             raise ValueError(
-                f"{missing_count} image(s) do not have matching YOLO label files. "
-                f"Examples: {examples}"
+                f"{len(missing_train)} training image(s) do not have matching YOLO label files. "
+                f"Examples: {missing_train[:5]}"
+            )
+
+        val_images, val_labels = self._resolve_validation_dirs(
+            train_images=train_images,
+            train_labels=train_labels,
+            val_images=val_images,
+            val_labels=val_labels,
+        )
+
+        val_count = self._count_images(val_images)
+        missing_val = self._missing_label_files(val_images, val_labels)
+        if missing_val:
+            raise ValueError(
+                f"{len(missing_val)} validation image(s) do not have matching YOLO label files. "
+                f"Examples: {missing_val[:5]}"
             )
 
         logger.info(
             f"YOLO segmentation dataset validated: "
             f"train_images={train_count}, val_images={val_count}"
+        )
+        return val_images, val_labels
+
+    def _resolve_validation_dirs(
+        self,
+        train_images: Path,
+        train_labels: Path,
+        val_images: Path,
+        val_labels: Path,
+    ) -> Tuple[Path, Path]:
+        val_ready = (
+            val_images.exists()
+            and val_images.is_dir()
+            and val_labels.exists()
+            and val_labels.is_dir()
+            and self._count_images(val_images) > 0
+        )
+        if val_ready:
+            return val_images, val_labels
+
+        if self.training_config.use_train_as_val_if_missing:
+            logger.warning(
+                "Validation dataset is missing or empty; using training data as validation. "
+                "This is useful for smoke tests, but validation metrics will be optimistic."
+            )
+            return train_images, train_labels
+
+        missing_paths = [
+            str(path)
+            for path in (val_images, val_labels)
+            if not path.exists() or not path.is_dir()
+        ]
+        raise FileNotFoundError(
+            "Validation dataset is missing or empty. "
+            f"Missing/invalid paths: {missing_paths or [str(val_images)]}. "
+            "Set training.use_train_as_val_if_missing=true to reuse training data."
         )
 
     @staticmethod

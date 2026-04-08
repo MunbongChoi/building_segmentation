@@ -56,6 +56,7 @@ training:
   val_images: data/images/val
   train_labels: data/labels/train
   val_labels: data/labels/val
+  use_train_as_val_if_missing: true
   class_names: [building]
 
   pretrained_weights: yolov8m-seg.pt

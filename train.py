@@ -37,6 +37,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--project", type=str, default=None, help="Training output project directory")
     parser.add_argument("--name", type=str, default=None, help="Training run name")
     parser.add_argument("--resume", action="store_true", help="Resume previous Ultralytics run")
+    parser.add_argument(
+        "--no-train-as-val-if-missing",
+        action="store_true",
+        help="Fail instead of using training data when validation data is missing",
+    )
     return parser.parse_args()
 
 
@@ -65,6 +70,8 @@ def apply_cli_overrides(config: PipelineConfig, args: argparse.Namespace) -> Non
     _set_if_not_none(training, "name", args.name)
     if args.resume:
         training.resume = True
+    if args.no_train_as_val_if_missing:
+        training.use_train_as_val_if_missing = False
 
 
 def _set_if_not_none(target: object, attr_name: str, value: Optional[object]) -> None:
