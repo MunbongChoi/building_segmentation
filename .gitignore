@@ -40,14 +40,26 @@ env/
 # Project specific
 data/
 outputs/
+*.png
+*.jpg
+*.jpeg
+*.bmp
+*.webp
 *.tif
 *.tiff
 *.geotiff
+*.geojson
+*.gpkg
 *.shp
 *.shx
 *.dbf
 *.prj
 *.cpg
+*.qix
+*.sbn
+*.sbx
+*.json
+!configs/*.json
 
 # Weights and models
 *.pt
@@ -55,6 +67,9 @@ outputs/
 *.ckpt
 *.weights
 yolov8*.pt
+weights/
+models/
+runs/
 
 # Logs
 logs/
@@ -68,6 +83,12 @@ logs/
 .pytest_cache/
 .coverage
 htmlcov/
+coverage.xml
+
+# Local environment
+.env
+.env.*
+!.env.example
 
 # OS
 Thumbs.db
