@@ -95,12 +95,24 @@ class TrainingConfig:
     """
     enabled: bool = False
     dataset_yaml: str = ""
+    label_format: str = "mask_png"  # mask_png or yolo_txt
     train_images: str = "data/images/train"
     val_images: Optional[str] = "data/images/val"
-    train_labels: str = "data/labels/train"
+    train_labels: str = "data/labels/train"  # yolo_txt labels or fallback mask dir
     val_labels: Optional[str] = "data/labels/val"
+    train_masks: Optional[str] = "data/labels/train"
+    val_masks: Optional[str] = "data/labels/val"
     use_train_as_val_if_missing: bool = True
     class_names: List[str] = field(default_factory=lambda: ["building"])
+
+    mask_dataset_dir: str = "outputs/training/mask_png_yolo_dataset"
+    mask_suffix: str = ""
+    mask_threshold: int = 0
+    mask_is_instance_encoded: bool = False
+    mask_min_area: float = 10.0
+    mask_simplification_epsilon: float = 1.5
+    resize_masks_to_images: bool = True
+    copy_mask_dataset_images: bool = False
 
     pretrained_weights: str = ""
     project: str = "outputs/training"
@@ -304,13 +316,24 @@ class PipelineConfig:
             'save_binary_mask': (self.visualization, 'save_binary_mask'),
             'training_enabled': (self.training, 'enabled'),
             'dataset_yaml': (self.training, 'dataset_yaml'),
+            'label_format': (self.training, 'label_format'),
             'train_images': (self.training, 'train_images'),
             'val_images': (self.training, 'val_images'),
             'train_labels': (self.training, 'train_labels'),
             'val_labels': (self.training, 'val_labels'),
+            'train_masks': (self.training, 'train_masks'),
+            'val_masks': (self.training, 'val_masks'),
             'use_train_as_val_if_missing': (self.training, 'use_train_as_val_if_missing'),
             'train_as_val': (self.training, 'use_train_as_val_if_missing'),
             'class_names': (self.training, 'class_names'),
+            'mask_dataset_dir': (self.training, 'mask_dataset_dir'),
+            'mask_suffix': (self.training, 'mask_suffix'),
+            'mask_threshold': (self.training, 'mask_threshold'),
+            'mask_is_instance_encoded': (self.training, 'mask_is_instance_encoded'),
+            'mask_min_area': (self.training, 'mask_min_area'),
+            'mask_simplification_epsilon': (self.training, 'mask_simplification_epsilon'),
+            'resize_masks_to_images': (self.training, 'resize_masks_to_images'),
+            'copy_mask_dataset_images': (self.training, 'copy_mask_dataset_images'),
             'pretrained_weights': (self.training, 'pretrained_weights'),
             'epochs': (self.training, 'epochs'),
             'training_epochs': (self.training, 'epochs'),

@@ -49,15 +49,26 @@ training:
   # Option A: provide an existing Ultralytics segmentation dataset YAML.
   dataset_yaml: ""
 
-  # Option B: let train.py generate outputs/training/dataset.yaml from these dirs.
-  # Expected label format:
-  #   class_id x1 y1 x2 y2 ... with normalized polygon coordinates.
+  # Option B: PNG images + masked PNG labels.
+  # Mask PNG labels are converted into YOLOv8-Seg polygon txt files automatically.
+  label_format: mask_png
   train_images: data/images/train
   val_images: data/images/val
+  train_masks: data/labels/train
+  val_masks: data/labels/val
   train_labels: data/labels/train
   val_labels: data/labels/val
   use_train_as_val_if_missing: true
   class_names: [building]
+
+  mask_dataset_dir: outputs/training/mask_png_yolo_dataset
+  mask_suffix: ""  # example: "_mask" for image.png -> image_mask.png
+  mask_threshold: 0
+  mask_is_instance_encoded: false
+  mask_min_area: 10.0
+  mask_simplification_epsilon: 1.5
+  resize_masks_to_images: true
+  copy_mask_dataset_images: false
 
   pretrained_weights: yolov8m-seg.pt
   project: outputs/training

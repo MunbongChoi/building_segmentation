@@ -28,6 +28,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--val-images", type=str, default=None, help="Validation image directory")
     parser.add_argument("--train-labels", type=str, default=None, help="Training label directory")
     parser.add_argument("--val-labels", type=str, default=None, help="Validation label directory")
+    parser.add_argument(
+        "--label-format",
+        choices=["mask_png", "yolo_txt"],
+        default=None,
+        help="Training label format. mask_png converts masked PNG labels to YOLO polygons.",
+    )
+    parser.add_argument("--train-masks", type=str, default=None, help="Training mask PNG directory")
+    parser.add_argument("--val-masks", type=str, default=None, help="Validation mask PNG directory")
+    parser.add_argument(
+        "--mask-suffix",
+        type=str,
+        default=None,
+        help="Mask filename suffix. Example: _mask maps image.png to image_mask.png.",
+    )
+    parser.add_argument("--mask-threshold", type=int, default=None, help="Foreground threshold for mask PNG")
     parser.add_argument("--weights", type=str, default=None, help="Pretrained or previous checkpoint path")
     parser.add_argument("--epochs", type=int, default=None, help="Training epochs")
     parser.add_argument("--batch", type=int, default=None, help="Total batch size")
@@ -60,6 +75,11 @@ def apply_cli_overrides(config: PipelineConfig, args: argparse.Namespace) -> Non
     _set_if_not_none(training, "val_images", args.val_images)
     _set_if_not_none(training, "train_labels", args.train_labels)
     _set_if_not_none(training, "val_labels", args.val_labels)
+    _set_if_not_none(training, "label_format", args.label_format)
+    _set_if_not_none(training, "train_masks", args.train_masks)
+    _set_if_not_none(training, "val_masks", args.val_masks)
+    _set_if_not_none(training, "mask_suffix", args.mask_suffix)
+    _set_if_not_none(training, "mask_threshold", args.mask_threshold)
     _set_if_not_none(training, "pretrained_weights", args.weights)
     _set_if_not_none(training, "epochs", args.epochs)
     _set_if_not_none(training, "batch", args.batch)

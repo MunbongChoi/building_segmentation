@@ -1,5 +1,6 @@
 """YOLOv8-Seg fine-tuning entrypoints."""
 import os
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -10,6 +11,9 @@ from ..utils.logger import logger
 
 
 TRAIN_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+MASK_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+LABEL_FORMAT_MASK_PNG = "mask_png"
+LABEL_FORMAT_YOLO_TXT = "yolo_txt"
 
 
 class YOLOSegFineTuner:
@@ -33,6 +37,15 @@ class YOLOSegFineTuner:
             if not dataset_yaml.exists():
                 raise FileNotFoundError(f"Dataset YAML not found: {dataset_yaml}")
             return self._resolve_existing_dataset_yaml(dataset_yaml)
+
+        label_format = self.training_config.label_format.lower()
+        if label_format == LABEL_FORMAT_MASK_PNG:
+            return self._prepare_mask_png_dataset_yaml()
+        if label_format != LABEL_FORMAT_YOLO_TXT:
+            raise ValueError(
+                "training.label_format must be either 'mask_png' or 'yolo_txt'. "
+                f"Got: {self.training_config.label_format}"
+            )
 
         train_images = self._required_path(
             self.training_config.train_images,
@@ -66,6 +79,334 @@ class YOLOSegFineTuner:
 
         logger.info(f"Generated training dataset YAML: {dataset_yaml}")
         return dataset_yaml
+
+    def _prepare_mask_png_dataset_yaml(self) -> Path:
+        """Convert masked PNG labels into a YOLOv8-Seg dataset."""
+        train_images = self._required_path(
+            self.training_config.train_images,
+            "training.train_images",
+        )
+        train_masks = self._resolve_mask_dir(
+            self.training_config.train_masks,
+            self.training_config.train_labels,
+            "training.train_masks",
+        )
+        val_images = self._optional_path(self.training_config.val_images)
+        val_masks = self._optional_path(
+            self.training_config.val_masks
+            if self.training_config.val_masks is not None
+            else self.training_config.val_labels
+        )
+
+        self._validate_image_mask_dataset(train_images, train_masks, split_name="train")
+        val_images, val_masks = self._resolve_mask_validation_dirs(
+            train_images=train_images,
+            train_masks=train_masks,
+            val_images=val_images,
+            val_masks=val_masks,
+        )
+        self._validate_image_mask_dataset(val_images, val_masks, split_name="val")
+
+        dataset_root = Path(self.training_config.mask_dataset_dir)
+        self._materialize_mask_png_split(
+            image_dir=train_images,
+            mask_dir=train_masks,
+            dataset_root=dataset_root,
+            split_name="train",
+        )
+        self._materialize_mask_png_split(
+            image_dir=val_images,
+            mask_dir=val_masks,
+            dataset_root=dataset_root,
+            split_name="val",
+        )
+
+        dataset_yaml = dataset_root / "dataset.yaml"
+        data = {
+            "path": self._path_for_yaml(dataset_root),
+            "train": "images/train",
+            "val": "images/val",
+            "names": {index: name for index, name in enumerate(self.training_config.class_names)},
+        }
+        with open(dataset_yaml, "w", encoding="utf-8") as handle:
+            yaml.safe_dump(data, handle, sort_keys=False, allow_unicode=True)
+
+        logger.info(f"Generated mask PNG training dataset YAML: {dataset_yaml}")
+        return dataset_yaml
+
+    def _resolve_mask_dir(
+        self,
+        mask_path_value: object,
+        fallback_path_value: object,
+        label: str,
+    ) -> Path:
+        mask_dir = self._optional_path(mask_path_value)
+        if mask_dir is not None:
+            return mask_dir
+
+        fallback_dir = self._optional_path(fallback_path_value)
+        if fallback_dir is not None:
+            return fallback_dir
+
+        raise ValueError(f"{label} is required when training.label_format='mask_png'.")
+
+    def _resolve_mask_validation_dirs(
+        self,
+        train_images: Path,
+        train_masks: Path,
+        val_images: Optional[Path],
+        val_masks: Optional[Path],
+    ) -> Tuple[Path, Path]:
+        val_ready = (
+            val_images is not None
+            and val_masks is not None
+            and val_images.exists()
+            and val_images.is_dir()
+            and val_masks.exists()
+            and val_masks.is_dir()
+            and self._count_images(val_images) > 0
+        )
+        if val_ready:
+            return val_images, val_masks
+
+        if self.training_config.use_train_as_val_if_missing:
+            logger.warning(
+                "Validation mask dataset is missing or empty; using training images/masks "
+                "as validation. Metrics will be optimistic."
+            )
+            return train_images, train_masks
+
+        missing_paths = [
+            self._format_optional_path(path, label)
+            for path, label in [
+                (val_images, "training.val_images"),
+                (val_masks, "training.val_masks"),
+            ]
+            if path is None or not path.exists() or not path.is_dir()
+        ]
+        raise FileNotFoundError(
+            "Validation mask dataset is missing or empty. "
+            f"Missing/invalid paths: {missing_paths or [str(val_images)]}. "
+            "Set training.use_train_as_val_if_missing=true to reuse training data."
+        )
+
+    def _validate_image_mask_dataset(
+        self,
+        image_dir: Path,
+        mask_dir: Path,
+        split_name: str,
+    ) -> None:
+        for path, label in [
+            (image_dir, f"{split_name} images"),
+            (mask_dir, f"{split_name} mask labels"),
+        ]:
+            if not path.exists():
+                raise FileNotFoundError(f"{label} directory not found: {path}")
+            if not path.is_dir():
+                raise NotADirectoryError(f"{label} path is not a directory: {path}")
+
+        image_files = self._list_images(image_dir)
+        if not image_files:
+            raise ValueError(f"No {split_name} images found in {image_dir}")
+
+        missing_masks = [
+            str(image_path)
+            for image_path in image_files
+            if self._find_matching_mask(image_path, mask_dir) is None
+        ]
+        if missing_masks:
+            raise ValueError(
+                f"{len(missing_masks)} {split_name} image(s) do not have matching mask PNG files. "
+                f"Examples: {missing_masks[:5]}"
+            )
+
+        logger.info(
+            f"Mask PNG dataset validated: split={split_name}, "
+            f"images={len(image_files)}, masks_dir={mask_dir}"
+        )
+
+    def _materialize_mask_png_split(
+        self,
+        image_dir: Path,
+        mask_dir: Path,
+        dataset_root: Path,
+        split_name: str,
+    ) -> None:
+        image_output_dir = dataset_root / "images" / split_name
+        label_output_dir = dataset_root / "labels" / split_name
+        image_output_dir.mkdir(parents=True, exist_ok=True)
+        label_output_dir.mkdir(parents=True, exist_ok=True)
+
+        image_files = self._list_images(image_dir)
+        for image_path in image_files:
+            mask_path = self._find_matching_mask(image_path, mask_dir)
+            if mask_path is None:
+                raise FileNotFoundError(f"Mask PNG not found for image: {image_path}")
+
+            output_image_path = image_output_dir / image_path.name
+            output_label_path = label_output_dir / f"{image_path.stem}.txt"
+            self._link_or_copy_image(image_path, output_image_path)
+            self._write_yolo_label_from_mask_png(
+                image_path=image_path,
+                mask_path=mask_path,
+                output_label_path=output_label_path,
+            )
+
+        logger.info(
+            f"Materialized {len(image_files)} {split_name} sample(s) from mask PNG labels "
+            f"under {dataset_root}"
+        )
+
+    def _write_yolo_label_from_mask_png(
+        self,
+        image_path: Path,
+        mask_path: Path,
+        output_label_path: Path,
+    ) -> None:
+        import cv2
+
+        image = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
+        if image is None:
+            raise FileNotFoundError(f"Failed to read training image: {image_path}")
+        image_height, image_width = image.shape[:2]
+
+        mask = cv2.imread(str(mask_path), cv2.IMREAD_UNCHANGED)
+        if mask is None:
+            raise FileNotFoundError(f"Failed to read mask PNG: {mask_path}")
+
+        if mask.shape[:2] != (image_height, image_width):
+            if not self.training_config.resize_masks_to_images:
+                raise ValueError(
+                    f"Mask/image size mismatch: image={image_path} shape={image.shape[:2]}, "
+                    f"mask={mask_path} shape={mask.shape[:2]}"
+                )
+            mask = cv2.resize(
+                mask,
+                (image_width, image_height),
+                interpolation=cv2.INTER_NEAREST,
+            )
+            logger.warning(
+                f"Resized mask to image size: mask={mask_path}, size={image_width}x{image_height}"
+            )
+
+        lines = self._mask_png_to_yolo_lines(mask, image_width, image_height)
+        output_label_path.parent.mkdir(parents=True, exist_ok=True)
+        output_label_path.write_text(
+            "\n".join(lines) + ("\n" if lines else ""),
+            encoding="utf-8",
+        )
+
+    def _mask_png_to_yolo_lines(self, mask, image_width: int, image_height: int) -> List[str]:
+        import cv2
+        import numpy as np
+
+        lines: List[str] = []
+        for instance_mask in self._iter_instance_masks(mask):
+            mask_uint8 = instance_mask.astype(np.uint8) * 255
+            contours, _ = cv2.findContours(
+                mask_uint8,
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE,
+            )
+            for contour in contours:
+                area = cv2.contourArea(contour)
+                if area < self.training_config.mask_min_area:
+                    continue
+
+                epsilon = float(self.training_config.mask_simplification_epsilon)
+                polygon = cv2.approxPolyDP(contour, epsilon, closed=True)
+                points = polygon.reshape(-1, 2)
+                if len(points) < 3:
+                    continue
+
+                coords = []
+                for x, y in points:
+                    coords.append(f"{min(max(float(x) / image_width, 0.0), 1.0):.6f}")
+                    coords.append(f"{min(max(float(y) / image_height, 0.0), 1.0):.6f}")
+
+                if len(coords) >= 6:
+                    lines.append("0 " + " ".join(coords))
+
+        return lines
+
+    def _iter_instance_masks(self, mask):
+        import cv2
+        import numpy as np
+
+        threshold = int(self.training_config.mask_threshold)
+        if self.training_config.mask_is_instance_encoded:
+            if mask.ndim == 2:
+                for value in np.unique(mask):
+                    if int(value) <= threshold:
+                        continue
+                    yield mask == value
+                return
+
+            color_mask = mask[..., :3]
+            flat_colors = color_mask.reshape(-1, color_mask.shape[-1])
+            unique_colors = np.unique(flat_colors, axis=0)
+            for color in unique_colors:
+                if np.all(color <= threshold):
+                    continue
+                yield np.all(color_mask == color, axis=-1)
+            return
+
+        gray_mask = self._mask_to_grayscale(mask)
+        foreground = gray_mask > threshold
+        if np.any(foreground):
+            yield foreground
+
+    @staticmethod
+    def _mask_to_grayscale(mask):
+        import cv2
+
+        if mask.ndim == 2:
+            return mask
+        if mask.shape[-1] == 4:
+            return cv2.cvtColor(mask, cv2.COLOR_BGRA2GRAY)
+        return cv2.cvtColor(mask, cv2.COLOR_BGR2GRAY)
+
+    def _link_or_copy_image(self, source_path: Path, output_path: Path) -> None:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if output_path.exists():
+            return
+
+        if self.training_config.copy_mask_dataset_images:
+            shutil.copy2(source_path, output_path)
+            return
+
+        try:
+            output_path.symlink_to(source_path.resolve())
+            return
+        except OSError:
+            pass
+
+        try:
+            os.link(source_path, output_path)
+            return
+        except OSError:
+            shutil.copy2(source_path, output_path)
+
+    @staticmethod
+    def _list_images(image_dir: Path) -> List[Path]:
+        return sorted(
+            path
+            for path in image_dir.iterdir()
+            if path.is_file() and path.suffix.lower() in TRAIN_IMAGE_EXTENSIONS
+        )
+
+    def _find_matching_mask(self, image_path: Path, mask_dir: Path) -> Optional[Path]:
+        mask_suffix = self.training_config.mask_suffix or ""
+        stem_candidates = [f"{image_path.stem}{mask_suffix}"]
+        if mask_suffix:
+            stem_candidates.append(image_path.stem)
+
+        for stem in stem_candidates:
+            for suffix in MASK_IMAGE_EXTENSIONS:
+                candidate = mask_dir / f"{stem}{suffix}"
+                if candidate.exists() and candidate.is_file():
+                    return candidate
+        return None
 
     def _resolve_existing_dataset_yaml(self, dataset_yaml: Path) -> Path:
         """Return an existing dataset YAML, adding val=train when val is absent."""
