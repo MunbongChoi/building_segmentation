@@ -176,6 +176,45 @@ def main():
         default="./outputs",
         help="Output directory (default: ./outputs)"
     )
+
+    convert_parser = subparsers.add_parser("tif-to-png", help="Convert TIF/GeoTIFF files to PNG")
+    convert_parser.add_argument("--input", required=True, help="TIF file or directory")
+    convert_parser.add_argument("--output-dir", default="data", help="PNG output directory")
+    convert_parser.add_argument(
+        "--bands",
+        type=int,
+        nargs="+",
+        default=None,
+        help="One grayscale band or three RGB/false-color bands. Example: --bands 4 3 2",
+    )
+    convert_parser.add_argument(
+        "--normalize",
+        choices=["auto", "none", "minmax", "percentile"],
+        default="auto",
+        help="8-bit scaling method",
+    )
+    convert_parser.add_argument(
+        "--percentiles",
+        type=float,
+        nargs=2,
+        default=(2.0, 98.0),
+        metavar=("LOW", "HIGH"),
+        help="Percentile stretch range used by --normalize percentile/auto",
+    )
+    convert_parser.add_argument(
+        "--tile-size",
+        type=int,
+        default=0,
+        help="If > 0, split each TIF into tiled PNGs of this size",
+    )
+    convert_parser.add_argument(
+        "--overlap-ratio",
+        type=float,
+        default=0.0,
+        help="Tile overlap ratio when --tile-size is used",
+    )
+    convert_parser.add_argument("--recursive", action="store_true", help="Search input directories recursively")
+    convert_parser.add_argument("--overwrite", action="store_true", help="Overwrite existing PNG files")
     
     args = parser.parse_args()
     
@@ -200,6 +239,21 @@ def main():
     
     elif args.command == "cleanup":
         cleanup_outputs(args.dir)
+
+    elif args.command == "tif-to-png":
+        from src.utils.tif_to_png import convert_tif_to_png
+
+        convert_tif_to_png(
+            input_path=args.input,
+            output_dir=args.output_dir,
+            bands=args.bands,
+            normalize=args.normalize,
+            percentiles=tuple(args.percentiles),
+            tile_size=args.tile_size,
+            overlap_ratio=args.overlap_ratio,
+            recursive=args.recursive,
+            overwrite=args.overwrite,
+        )
     
     else:
         parser.print_help()
