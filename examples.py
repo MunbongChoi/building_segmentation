@@ -82,7 +82,7 @@ def example_data_loader(input_path: Optional[str] = None, config_path: Optional[
     )
     logger.info(f"Grid info: {grid_info}")
 
-    for tile_index, tile in enumerate(loader.tile_geotiff(str(path))):
+    for tile_index, tile in enumerate(loader.tile_image(str(path))):
         logger.info(
             f"Tile {tile.tile_id}: offset=({tile.global_x}, {tile.global_y}), "
             f"valid_size={tile.valid_width}x{tile.valid_height}, bounds={tile.bounds}"
@@ -136,6 +136,22 @@ def example_multi_gpu(config_path: Optional[str] = None, load_model: bool = Fals
     logger.info(f"Inference devices: {devices}")
     manager.clear_gpu_cache()
     return devices
+
+
+def example_finetune(config_path: Optional[str] = None):
+    """YOLOv8-Seg fine-tuning example."""
+    from src.core.training import YOLOSegFineTuner
+    from src.utils.logger import setup_logger
+
+    config = _load_config(config_path)
+    config.training.enabled = True
+    setup_logger(
+        log_dir=str(config.data.output_dir / "logs"),
+        log_level=config.log_level,
+        name="training",
+    )
+    trainer = YOLOSegFineTuner(config)
+    return trainer.train()
 
 
 def example_config_management(output_path: str = "configs/custom_config.yaml"):
@@ -203,6 +219,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="GPU별 모델 인스턴스 로드까지 수행",
     )
 
+    finetune = subparsers.add_parser("finetune", help="YOLOv8-Seg fine-tuning")
+    finetune.add_argument("--config", type=str, help="YAML config file")
+
     config = subparsers.add_parser("config", help="설정 관리")
     config.add_argument(
         "--output",
@@ -224,6 +243,8 @@ def main() -> None:
         example_data_loader(input_path=args.input, config_path=args.config)
     elif args.example_name == "multi_gpu":
         example_multi_gpu(config_path=args.config, load_model=args.load_model)
+    elif args.example_name == "finetune":
+        example_finetune(config_path=args.config)
     elif args.example_name == "config":
         example_config_management(output_path=args.output)
     else:

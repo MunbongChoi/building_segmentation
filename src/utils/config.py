@@ -87,6 +87,73 @@ class AugmentationConfig:
 
 
 @dataclass
+class TrainingConfig:
+    """YOLOv8-Seg fine-tuning settings.
+
+    The training path expects the Ultralytics segmentation label format:
+    class_id x1 y1 x2 y2 ... with normalized polygon coordinates.
+    """
+    enabled: bool = False
+    dataset_yaml: str = ""
+    train_images: str = "data/images/train"
+    val_images: str = "data/images/val"
+    train_labels: str = "data/labels/train"
+    val_labels: str = "data/labels/val"
+    class_names: List[str] = field(default_factory=lambda: ["building"])
+
+    pretrained_weights: str = ""
+    project: str = "outputs/training"
+    name: str = "yolov8_building_seg"
+    exist_ok: bool = True
+    resume: bool = False
+
+    epochs: int = 100
+    imgsz: int = 1024
+    batch: int = 8
+    workers: int = 8
+    patience: int = 30
+    device: str = ""  # empty means derive from gpu.device_ids
+    seed: int = 42
+    deterministic: bool = False
+    amp: bool = True
+    cache: bool = False
+    rect: bool = False
+    val: bool = True
+    plots: bool = True
+    save_period: int = -1
+    single_cls: bool = True
+
+    optimizer: str = "auto"
+    lr0: float = 0.001
+    lrf: float = 0.01
+    momentum: float = 0.937
+    weight_decay: float = 0.0005
+    warmup_epochs: float = 3.0
+    close_mosaic: int = 10
+    dropout: float = 0.0
+
+    # Segmentation-specific Ultralytics options.
+    overlap_mask: bool = True
+    mask_ratio: int = 4
+
+    # Training-time augmentation knobs passed to Ultralytics.
+    hsv_h: float = 0.015
+    hsv_s: float = 0.7
+    hsv_v: float = 0.4
+    degrees: float = 0.0
+    translate: float = 0.1
+    scale: float = 0.5
+    shear: float = 0.0
+    perspective: float = 0.0
+    flipud: float = 0.0
+    fliplr: float = 0.5
+    mosaic: float = 1.0
+    mixup: float = 0.0
+    copy_paste: float = 0.0
+    erasing: float = 0.4
+
+
+@dataclass
 class VisualizationConfig:
     """마스크 결과물 시각화 설정"""
     enabled: bool = True
@@ -106,6 +173,7 @@ class PipelineConfig:
     gpu: GPUConfig = field(default_factory=GPUConfig)
     postprocessing: PostProcessingConfig = field(default_factory=PostProcessingConfig)
     augmentation: AugmentationConfig = field(default_factory=AugmentationConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
     visualization: VisualizationConfig = field(default_factory=VisualizationConfig)
     
     # YAML 기반 하이퍼파라미터 override.
@@ -144,6 +212,12 @@ class PipelineConfig:
             augmentation=AugmentationConfig(
                 **_filter_fields(AugmentationConfig, augmentation_dict)
             ),
+            training=TrainingConfig(
+                **_filter_fields(
+                    TrainingConfig,
+                    config_dict.get('training') or config_dict.get('train') or {},
+                )
+            ),
             visualization=VisualizationConfig(
                 **_filter_fields(VisualizationConfig, config_dict.get('visualization', {}) or {})
             ),
@@ -167,6 +241,8 @@ class PipelineConfig:
             'postprocessing': self.postprocessing,
             'augmentation': self.augmentation,
             'aug': self.augmentation,
+            'training': self.training,
+            'train': self.training,
             'visualization': self.visualization,
             'viz': self.visualization,
         }
@@ -225,6 +301,28 @@ class PipelineConfig:
             'contour_color': (self.visualization, 'contour_color'),
             'draw_contours': (self.visualization, 'draw_contours'),
             'save_binary_mask': (self.visualization, 'save_binary_mask'),
+            'training_enabled': (self.training, 'enabled'),
+            'dataset_yaml': (self.training, 'dataset_yaml'),
+            'train_images': (self.training, 'train_images'),
+            'val_images': (self.training, 'val_images'),
+            'train_labels': (self.training, 'train_labels'),
+            'val_labels': (self.training, 'val_labels'),
+            'class_names': (self.training, 'class_names'),
+            'pretrained_weights': (self.training, 'pretrained_weights'),
+            'epochs': (self.training, 'epochs'),
+            'training_epochs': (self.training, 'epochs'),
+            'imgsz': (self.training, 'imgsz'),
+            'train_imgsz': (self.training, 'imgsz'),
+            'train_batch': (self.training, 'batch'),
+            'train_workers': (self.training, 'workers'),
+            'train_device': (self.training, 'device'),
+            'train_project': (self.training, 'project'),
+            'train_name': (self.training, 'name'),
+            'learning_rate': (self.training, 'lr0'),
+            'lr0': (self.training, 'lr0'),
+            'lrf': (self.training, 'lrf'),
+            'weight_decay': (self.training, 'weight_decay'),
+            'warmup_epochs': (self.training, 'warmup_epochs'),
         }
         
         for key, value in hparams.items():
@@ -252,6 +350,7 @@ class PipelineConfig:
             'gpu': self.gpu.__dict__,
             'postprocessing': self.postprocessing.__dict__,
             'augmentation': self.augmentation.__dict__,
+            'training': self.training.__dict__,
             'visualization': self.visualization.__dict__,
             'hyperparameters': self.hyperparameters,
             'log_level': self.log_level,

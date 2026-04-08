@@ -1,68 +1,121 @@
-# Phase 1: YOLOv8-Seg + SAHI Configuration
-# Building Instance Segmentation Pipeline
+# Phase 1: YOLOv8-Seg + SAHI-style tiled inference
 
-# 데이터 설정
 data:
   data_dir: ./data
   output_dir: ./outputs
   tile_size: 1024
-  overlap_ratio: 0.1  # 10% 타일 오버랩
+  overlap_ratio: 0.1
   input_format: png
 
-# 모델 설정
 model:
-  # YOLOv8-Seg 모델 (크기 선택)
-  # yolov8n-seg: 나노 (빠름, 경량)
-  # yolov8s-seg: 소형 (균형)
-  # yolov8m-seg: 중형 (추천)
-  # yolov8l-seg: 대형 (정밀, 느림)
   model_name: yolov8m-seg
-  model_weights: yolov8m-seg.pt  # Ultralytics Hub에서 자동 다운로드
-
-  # 신뢰도 및 IOU 임계값
-  conf_threshold: 0.4  # 높을수록 엄격함 (보수적)
+  model_weights: yolov8m-seg.pt
+  conf_threshold: 0.4
   iou_threshold: 0.5
-
-  # SAHI 슬라이싱 설정
   sahi_slice_height: 1024
   sahi_slice_width: 1024
-  sahi_overlap_height_ratio: 0.1  # 10% 오버랩
+  sahi_overlap_height_ratio: 0.1
   sahi_overlap_width_ratio: 0.1
-  
-  # NMS 설정
   mask_nms_threshold: 0.5
 
-# GPU 설정
 gpu:
-  device_ids: [0, 1, 2, 3]  # RTX 4090 x 4
-  device: cuda  # cuda, cpu, auto
-  require_cuda: true  # CUDA가 안 보이면 즉시 실패
-  allow_cpu_fallback: false  # true일 때만 CPU fallback 허용
-  cuda_visible_devices: ""  # 예: "0,1,2,3". 비우면 환경값 유지
+  device_ids: [0, 1, 2, 3]
+  device: cuda
+  require_cuda: true
+  allow_cpu_fallback: false
+  cuda_visible_devices: ""
   use_multi_gpu: true
-  batch_size: 1  # SAHI는 배치 처리 미지원
+  batch_size: 1
   num_workers: 4
   pin_memory: true
 
-# 후처리 설정
 postprocessing:
-  # Douglas-Peucker 단순화
-  simplification_tolerance: 1.0  # 픽셀 단위 (낮을수록 정밀)
-
-  # 직각화
+  simplification_tolerance: 1.0
   enable_right_angle_regularization: true
-  right_angle_tolerance: 5.0  # 도(degree)
-
-  # 최소 폴리곤 면적 필터
-  min_polygon_area: 100.0  # 픽셀^2
-
-  # 출력 포맷
-  # PNG 입력은 CRS가 없으므로 결과 좌표는 픽셀 좌표계다.
+  right_angle_tolerance: 5.0
+  min_polygon_area: 100.0
   output_formats: [geojson, json]
 
-# 하이퍼파라미터 override
-# 아래 값은 위 data/model/gpu/postprocessing/augmentation 섹션 값을 덮어쓴다.
-# 실험 시에는 이 섹션만 바꿔도 된다.
+augmentation:
+  enable_tta: false
+  tta_scales: [1.0]
+  horizontal_flip: false
+  vertical_flip: false
+  merge_iou_threshold: 0.5
+
+training:
+  enabled: false
+
+  # Option A: provide an existing Ultralytics segmentation dataset YAML.
+  dataset_yaml: ""
+
+  # Option B: let train.py generate outputs/training/dataset.yaml from these dirs.
+  # Expected label format:
+  #   class_id x1 y1 x2 y2 ... with normalized polygon coordinates.
+  train_images: data/images/train
+  val_images: data/images/val
+  train_labels: data/labels/train
+  val_labels: data/labels/val
+  class_names: [building]
+
+  pretrained_weights: yolov8m-seg.pt
+  project: outputs/training
+  name: yolov8_building_seg
+  exist_ok: true
+  resume: false
+
+  epochs: 100
+  imgsz: 1024
+  batch: 8
+  workers: 8
+  patience: 30
+  device: ""  # empty: derive from gpu.device_ids, e.g. 0,1,2,3
+  seed: 42
+  deterministic: false
+  amp: true
+  cache: false
+  rect: false
+  val: true
+  plots: true
+  save_period: -1
+  single_cls: true
+
+  optimizer: auto
+  lr0: 0.001
+  lrf: 0.01
+  momentum: 0.937
+  weight_decay: 0.0005
+  warmup_epochs: 3.0
+  close_mosaic: 10
+  dropout: 0.0
+
+  overlap_mask: true
+  mask_ratio: 4
+
+  hsv_h: 0.015
+  hsv_s: 0.7
+  hsv_v: 0.4
+  degrees: 0.0
+  translate: 0.1
+  scale: 0.5
+  shear: 0.0
+  perspective: 0.0
+  flipud: 0.0
+  fliplr: 0.5
+  mosaic: 1.0
+  mixup: 0.0
+  copy_paste: 0.0
+  erasing: 0.4
+
+visualization:
+  enabled: true
+  max_preview_size: 4096
+  alpha: 0.45
+  mask_color: [255, 0, 0]
+  contour_color: [0, 255, 255]
+  draw_contours: true
+  save_binary_mask: false
+
 hyperparameters:
   tile_size: 1024
   overlap_ratio: 0.1
@@ -92,33 +145,5 @@ hyperparameters:
   mask_overlay_alpha: 0.45
   save_binary_mask: false
 
-# Augmentation 설정
-# 현재 실행 파이프라인에는 inference-time augmentation(TTA)만 적용된다.
-# training은 향후 학습 파이프라인에서 같은 YAML을 재사용하기 위한 보존 영역이다.
-augmentation:
-  enable_tta: false
-  tta_scales: [1.0]
-  horizontal_flip: false
-  vertical_flip: false
-  merge_iou_threshold: 0.5
-  training:
-    random_horizontal_flip: false
-    random_vertical_flip: false
-    random_rotate90: false
-    color_jitter: false
-    mosaic: false
-    mixup: false
-
-# 결과 시각화 설정
-visualization:
-  enabled: true
-  max_preview_size: 4096  # 가장 긴 축 기준 preview 크기. 대용량 TIF 메모리 보호용
-  alpha: 0.45
-  mask_color: [255, 0, 0]      # RGB
-  contour_color: [0, 255, 255] # RGB
-  draw_contours: true
-  save_binary_mask: false
-
-# 파이프라인 설정
-log_level: INFO  # DEBUG, INFO, WARNING, ERROR
-save_intermediate: false  # 중간 결과 저장 여부 (디버깅용)
+log_level: INFO
+save_intermediate: false
