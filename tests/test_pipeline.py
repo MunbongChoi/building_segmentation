@@ -1,6 +1,7 @@
 """Phase 1 파이프라인 테스트"""
 import numpy as np
 import pytest
+import yaml
 from pathlib import Path
 from unittest.mock import Mock, patch
 from affine import Affine
@@ -229,6 +230,53 @@ visualization:
         assert loaded_config.augmentation.enable_tta is True
         assert loaded_config.augmentation.tta_scales == [1.0, 1.25]
         assert loaded_config.visualization.enabled is False
+
+
+class TestYOLOTrainingConfig:
+    def test_missing_validation_paths_can_reuse_training_data(self, tmp_path):
+        from src.core.training import YOLOSegFineTuner
+
+        train_images = tmp_path / "images" / "train"
+        train_labels = tmp_path / "labels" / "train"
+        train_images.mkdir(parents=True)
+        train_labels.mkdir(parents=True)
+        (train_images / "sample.png").write_bytes(b"")
+        (train_labels / "sample.txt").write_text("0 0 0 1 0 1 1\n", encoding="utf-8")
+
+        config = PipelineConfig()
+        config.data.output_dir = tmp_path / "outputs"
+        config.training.train_images = str(train_images)
+        config.training.train_labels = str(train_labels)
+        config.training.val_images = None
+        config.training.val_labels = None
+        config.training.use_train_as_val_if_missing = True
+
+        dataset_yaml = YOLOSegFineTuner(config).prepare_dataset_yaml()
+
+        dataset = yaml.safe_load(dataset_yaml.read_text(encoding="utf-8"))
+        assert dataset["train"] == train_images.resolve().as_posix()
+        assert dataset["val"] == train_images.resolve().as_posix()
+
+    def test_missing_validation_paths_fail_when_train_as_val_is_disabled(self, tmp_path):
+        from src.core.training import YOLOSegFineTuner
+
+        train_images = tmp_path / "images" / "train"
+        train_labels = tmp_path / "labels" / "train"
+        train_images.mkdir(parents=True)
+        train_labels.mkdir(parents=True)
+        (train_images / "sample.png").write_bytes(b"")
+        (train_labels / "sample.txt").write_text("0 0 0 1 0 1 1\n", encoding="utf-8")
+
+        config = PipelineConfig()
+        config.data.output_dir = tmp_path / "outputs"
+        config.training.train_images = str(train_images)
+        config.training.train_labels = str(train_labels)
+        config.training.val_images = None
+        config.training.val_labels = None
+        config.training.use_train_as_val_if_missing = False
+
+        with pytest.raises(FileNotFoundError, match="training.val_images is not configured"):
+            YOLOSegFineTuner(config).prepare_dataset_yaml()
 
 
 class TestIntegration:

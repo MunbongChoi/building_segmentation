@@ -1,6 +1,6 @@
 """프로젝트 설정 관리"""
 from dataclasses import dataclass, field, fields
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from pathlib import Path
 import yaml
 
@@ -96,9 +96,9 @@ class TrainingConfig:
     enabled: bool = False
     dataset_yaml: str = ""
     train_images: str = "data/images/train"
-    val_images: str = "data/images/val"
+    val_images: Optional[str] = "data/images/val"
     train_labels: str = "data/labels/train"
-    val_labels: str = "data/labels/val"
+    val_labels: Optional[str] = "data/labels/val"
     use_train_as_val_if_missing: bool = True
     class_names: List[str] = field(default_factory=lambda: ["building"])
 

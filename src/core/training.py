@@ -1,7 +1,7 @@
 """YOLOv8-Seg fine-tuning entrypoints."""
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -34,10 +34,16 @@ class YOLOSegFineTuner:
                 raise FileNotFoundError(f"Dataset YAML not found: {dataset_yaml}")
             return self._resolve_existing_dataset_yaml(dataset_yaml)
 
-        train_images = Path(self.training_config.train_images)
-        val_images = Path(self.training_config.val_images)
-        train_labels = Path(self.training_config.train_labels)
-        val_labels = Path(self.training_config.val_labels)
+        train_images = self._required_path(
+            self.training_config.train_images,
+            "training.train_images",
+        )
+        train_labels = self._required_path(
+            self.training_config.train_labels,
+            "training.train_labels",
+        )
+        val_images = self._optional_path(self.training_config.val_images)
+        val_labels = self._optional_path(self.training_config.val_labels)
 
         val_images, val_labels = self._validate_yolo_seg_dataset(
             train_images,
@@ -217,9 +223,9 @@ class YOLOSegFineTuner:
     def _validate_yolo_seg_dataset(
         self,
         train_images: Path,
-        val_images: Path,
+        val_images: Optional[Path],
         train_labels: Path,
-        val_labels: Path,
+        val_labels: Optional[Path],
     ) -> Tuple[Path, Path]:
         for path, label in [
             (train_images, "training images"),
@@ -266,11 +272,13 @@ class YOLOSegFineTuner:
         self,
         train_images: Path,
         train_labels: Path,
-        val_images: Path,
-        val_labels: Path,
+        val_images: Optional[Path],
+        val_labels: Optional[Path],
     ) -> Tuple[Path, Path]:
         val_ready = (
-            val_images.exists()
+            val_images is not None
+            and val_labels is not None
+            and val_images.exists()
             and val_images.is_dir()
             and val_labels.exists()
             and val_labels.is_dir()
@@ -287,15 +295,41 @@ class YOLOSegFineTuner:
             return train_images, train_labels
 
         missing_paths = [
-            str(path)
-            for path in (val_images, val_labels)
-            if not path.exists() or not path.is_dir()
+            self._format_optional_path(path, label)
+            for path, label in [
+                (val_images, "training.val_images"),
+                (val_labels, "training.val_labels"),
+            ]
+            if path is None or not path.exists() or not path.is_dir()
         ]
+        validation_path = (
+            self._format_optional_path(val_images, "training.val_images")
+            if val_images is None
+            else str(val_images)
+        )
         raise FileNotFoundError(
             "Validation dataset is missing or empty. "
-            f"Missing/invalid paths: {missing_paths or [str(val_images)]}. "
+            f"Missing/invalid paths: {missing_paths or [validation_path]}. "
             "Set training.use_train_as_val_if_missing=true to reuse training data."
         )
+
+    @staticmethod
+    def _required_path(path_value: object, label: str) -> Path:
+        if path_value is None or (isinstance(path_value, str) and not path_value.strip()):
+            raise ValueError(f"{label} is required when training.dataset_yaml is not set.")
+        return Path(path_value)
+
+    @staticmethod
+    def _optional_path(path_value: object) -> Optional[Path]:
+        if path_value is None or (isinstance(path_value, str) and not path_value.strip()):
+            return None
+        return Path(path_value)
+
+    @staticmethod
+    def _format_optional_path(path: Optional[Path], label: str) -> str:
+        if path is None:
+            return f"{label} is not configured"
+        return str(path)
 
     @staticmethod
     def _count_images(image_dir: Path) -> int:
